@@ -1,0 +1,18 @@
+# LangChain Core
+langchain
+langchain-core
+
+# Hugging Face Integration
+langchain-huggingface
+huggingface-hub
+
+# Environment Variable Management
+python-dotenv
+
+# Machine Learning Utilities
+numpy
+scikit-learn
+
+streamlit
+ddgs
+wikipedia
