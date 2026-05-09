@@ -16,3 +16,4 @@ scikit-learn
 streamlit
 ddgs
 wikipedia
+PyPDF2
