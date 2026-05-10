@@ -5,7 +5,6 @@ import io
 from datetime import datetime
 
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from ddgs import DDGS
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -16,7 +15,7 @@ load_dotenv()
 st.set_page_config(page_title="AI Chatbot", page_icon="🤖", layout="wide")
 
 # ══════════════════════════════════════════════════════════════
-# GLOBAL CSS + JS  (KaTeX · Mermaid · Copy buttons · Callouts)
+# GLOBAL CSS + JS  (KaTeX · Callouts)
 # ══════════════════════════════════════════════════════════════
 st.markdown(r"""
 <!-- KaTeX -->
@@ -43,74 +42,10 @@ st.markdown(r"""
     }).observe(document.body,{childList:true,subtree:true});
   "></script>
 
-<!-- Mermaid -->
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>
-  mermaid.initialize({startOnLoad:false, theme:'dark',
-    themeVariables:{background:'#0d1117',primaryColor:'#1f6feb',
-    primaryTextColor:'#e6edf3',lineColor:'#58a6ff',secondaryColor:'#161b22'}});
-  function renderMermaid(){
-    document.querySelectorAll('.mermaid-src').forEach(el=>{
-      if(el.dataset.rendered) return;
-      el.dataset.rendered='1';
-      const div=document.createElement('div');
-      div.className='mermaid';
-      div.textContent=el.textContent;
-      el.parentNode.replaceChild(div,el);
-      mermaid.init(undefined,div);
-    });
-  }
-  new MutationObserver(renderMermaid).observe(document.body,{childList:true,subtree:true});
-</script>
-
-<!-- Clipboard copy helper -->
-<script>
-function copyCode(id){
-  const el=document.getElementById(id);
-  if(!el) return;
-  navigator.clipboard.writeText(el.innerText).then(()=>{
-    const btn=document.querySelector('[data-copy="'+id+'"]');
-    if(btn){btn.innerText='Copied!';setTimeout(()=>btn.innerText='Copy',2000);}
-  });
-}
-</script>
-
 <style>
 /* KaTeX */
 .katex{font-size:1.15rem!important}
 .katex-display{overflow-x:auto;padding:.5rem 0}
-
-/* Code wrapper */
-.code-wrap{position:relative;margin:.8rem 0}
-.code-wrap pre{
-  background:#0d1117!important;border:1px solid #30363d!important;
-  border-radius:8px!important;padding:2.6rem 1rem 1rem 1rem!important;
-  overflow-x:auto!important;
-  font-family:'JetBrains Mono','Fira Code','Cascadia Code',monospace!important;
-  font-size:.88rem!important;line-height:1.65!important;margin:0;white-space:pre!important}
-.code-wrap code{
-  background:transparent!important;border:none!important;
-  padding:0!important;color:#e6edf3!important;font-size:inherit!important;
-  white-space:pre!important}
-.code-toolbar{
-  position:absolute;top:0;left:0;right:0;
-  display:flex;align-items:center;justify-content:space-between;
-  padding:5px 12px;border-bottom:1px solid #21262d;
-  background:#161b22;border-radius:8px 8px 0 0;z-index:1}
-.lang-badge{font-size:.72rem;font-family:monospace;text-transform:uppercase;
-  font-weight:600;letter-spacing:.05em}
-.copy-btn{
-  font-size:.72rem;background:#21262d;color:#8b949e;border:1px solid #30363d;
-  border-radius:4px;padding:2px 10px;cursor:pointer;transition:all .15s;
-  font-family:inherit}
-.copy-btn:hover{background:#388bfd22;color:#58a6ff;border-color:#388bfd}
-
-/* Inline code */
-code{
-  font-family:'JetBrains Mono','Fira Code',monospace!important;
-  font-size:.88em!important;background:#161b22!important;
-  padding:2px 5px!important;border-radius:4px!important;
-  border:1px solid #30363d!important;color:#79c0ff!important}
 
 /* Tables */
 table{width:100%!important;border-collapse:collapse!important;margin:1rem 0!important;
@@ -123,15 +58,6 @@ th,td{padding:10px 14px!important;text-align:left!important;
 th:last-child,td:last-child{border-right:none!important}
 tbody tr:nth-child(even){background:#161b22!important}
 tbody tr:hover{background:#1c2736!important;transition:background .15s}
-
-/* Diff highlighting */
-.diff-add{background:#1a4721;color:#3fb950;display:block;padding:0 4px;
-  border-left:3px solid #3fb950;margin-left:-4px}
-.diff-rem{background:#4a1e1e;color:#f85149;display:block;padding:0 4px;
-  border-left:3px solid #f85149;margin-left:-4px}
-.diff-info{background:#162535;color:#58a6ff;display:block;padding:0 4px;
-  border-left:3px solid #58a6ff;margin-left:-4px}
-.diff-ctx{color:#8b949e;display:block;padding:0 4px}
 
 /* Callout boxes */
 .callout{border-radius:8px;padding:.75rem 1rem;margin:.8rem 0;
@@ -168,10 +94,6 @@ h1,h2,h3,h4{margin-top:1.2rem!important;margin-bottom:.5rem!important;
 /* Stat badges */
 .stat-badge{display:inline-block;background:#161b22;border:1px solid #30363d;
   border-radius:20px;padding:2px 10px;font-size:.78rem;color:#8b949e;margin-right:6px}
-
-/* Mermaid */
-.mermaid{background:#0d1117;border:1px solid #30363d;border-radius:8px;
-  padding:1rem;margin:.8rem 0;overflow-x:auto}
 
 /* Chat polish */
 [data-testid="stChatMessage"]{border-radius:12px!important;margin-bottom:4px!important}
@@ -225,7 +147,6 @@ Always format mathematical expressions using LaTeX:
 Format code in fenced blocks with language tag: ```python
 Use markdown tables for comparisons.
 Use **bold** for key terms, > blockquotes for notes/tips.
-For diagrams/flowcharts use mermaid: ```mermaid
 For warnings use: > ⚠️ Warning: text
 For tips use: > 💡 Tip: text""",
 
@@ -233,15 +154,13 @@ For tips use: > 💡 Tip: text""",
 Provide clean, production-quality, well-commented code.
 Always use fenced code blocks: ```python
 Format equations with LaTeX. Use tables for comparisons.
-Use mermaid for architecture diagrams: ```mermaid
 Highlight important notes with: > ⚠️ Warning: or > 💡 Tip:""",
 
     "Data Scientist": """You are an expert in ML, Data Science, AI and GenAI.
 Use precise technical explanations.
 ALWAYS render mathematical formulas using LaTeX:
 - Use $$...$$ for display equations  |  $...$ for inline math
-Format code with proper language tags. Use markdown tables.
-Use mermaid for flowcharts and pipelines.""",
+Format code with proper language tags. Use markdown tables.""",
 
     "Interviewer": """You are a professional technical interviewer.
 Ask focused questions and evaluate answers critically.
@@ -473,27 +392,6 @@ def build_augmented_prompt(query: str, results: str) -> str:
 
 import html as _html
 
-_COPY_CTR = 0
-
-LANG_COLORS = {
-    "python":"#3572A5","js":"#F7DF1E","javascript":"#F7DF1E",
-    "ts":"#3178C6","typescript":"#3178C6","html":"#E34C26","css":"#563D7C",
-    "sql":"#E38C00","bash":"#4EAA25","sh":"#4EAA25","shell":"#4EAA25",
-    "json":"#8BC34A","yaml":"#CB171E","c":"#555555","cpp":"#F34B7D",
-    "java":"#B07219","go":"#00ADD8","rust":"#DEA584","r":"#198CE7",
-    "markdown":"#083FA1","md":"#083FA1","diff":"#F0C040","mermaid":"#FF6B6B",
-}
-
-CALLOUT_MAP = {
-    "warning":("warning","⚠️"), "tip":("tip","💡"),
-    "info":("info","ℹ️"),       "note":("info","📝"),
-    "success":("success","✅"), "error":("error","❌"),
-    "danger":("error","🚨"),
-}
-CALLOUT_EMOJI = {
-    "⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error",
-}
-
 # ── 1. LATEX NORMALISER ───────────────────────────────────────
 _RAW_DISPLAY_RE = re.compile(
     r'(?<!\$)'
@@ -512,7 +410,6 @@ _PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
 
 
 def _normalise_latex(text: str) -> str:
-    """Wrap bare LaTeX constructs that Qwen emits without $…$ delimiters."""
     text = _BRACKET_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1).strip()}\n$$', text)
     text = _PAREN_INLINE_RE.sub(lambda m: f'${m.group(1).strip()}$', text)
     text = _RAW_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1)}\n$$', text)
@@ -549,169 +446,16 @@ def _extract_think_blocks(text: str):
     return text, blocks
 
 
-# ── 3. SYNTAX COLOURISERS ─────────────────────────────────────
-
-def _colorize(code: str, lang: str) -> str:
-    # ── FIX: escape HTML first so < > & are safe, then inject spans ──
-    c = _html.escape(code)
-    L = lang.lower()
-
-    if L in ("python", ""):
-        c = re.sub(
-            r'\b(def|class|return|import|from|if|elif|else|for|while|'
-            r'try|except|finally|with|as|pass|break|continue|lambda|'
-            r'yield|raise|assert|del|global|nonlocal|and|or|not|in|is|'
-            r'True|False|None|async|await)\b',
-            r'<span style="color:#ff7b72">\1</span>', c)
-        # strings — must run before comment regex to avoid // inside strings
-        c = re.sub(
-            r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')',
-            r'<span style="color:#a5d6ff">\1</span>', c)
-        c = re.sub(r'(#[^\n]*)', r'<span style="color:#8b949e">\1</span>', c)
-        c = re.sub(r'\b(\d+\.?\d*)\b', r'<span style="color:#79c0ff">\1</span>', c)
-        c = re.sub(
-            r'\b(print|len|range|type|str|int|float|list|dict|set|tuple|'
-            r'bool|open|zip|map|filter|enumerate|isinstance|hasattr|getattr|'
-            r'setattr|super|property|staticmethod|classmethod|self|cls)\b',
-            r'<span style="color:#d2a8ff">\1</span>', c)
-        c = re.sub(r'(@\w+)', r'<span style="color:#ffa657">\1</span>', c)
-
-    elif L in ("js","javascript","ts","typescript"):
-        c = re.sub(
-            r'\b(const|let|var|function|return|if|else|for|while|class|'
-            r'import|export|from|async|await|try|catch|finally|new|this|'
-            r'typeof|instanceof|true|false|null|undefined|of|in|default|'
-            r'switch|case|break|continue|throw)\b',
-            r'<span style="color:#ff7b72">\1</span>', c)
-        c = re.sub(
-            r'(`[^`]*`|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')',
-            r'<span style="color:#a5d6ff">\1</span>', c)
-        c = re.sub(r'(//[^\n]*|/\*[\s\S]*?\*/)', r'<span style="color:#8b949e">\1</span>', c)
-        c = re.sub(r'\b(\d+\.?\d*)\b', r'<span style="color:#79c0ff">\1</span>', c)
-
-    elif L == "sql":
-        c = re.sub(
-            r'\b(SELECT|FROM|WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|'
-            r'ORDER|HAVING|INSERT|UPDATE|DELETE|CREATE|TABLE|INDEX|DROP|ALTER|'
-            r'AND|OR|NOT|IN|IS|NULL|AS|DISTINCT|LIMIT|OFFSET|UNION|ALL|'
-            r'COUNT|SUM|AVG|MAX|MIN|WITH|RETURNING)\b',
-            r'<span style="color:#ff7b72">\1</span>', c, flags=re.IGNORECASE)
-        c = re.sub(r"('[^']*')", r'<span style="color:#a5d6ff">\1</span>', c)
-        c = re.sub(r'(--[^\n]*)', r'<span style="color:#8b949e">\1</span>', c)
-
-    elif L in ("bash","sh","shell"):
-        c = re.sub(
-            r'\b(echo|cd|ls|mkdir|rm|cp|mv|grep|awk|sed|cat|chmod|'
-            r'export|source|pip|python|python3|git|curl|wget|sudo|apt|'
-            r'brew|npm|yarn|docker|kubectl|ssh|scp|tar|unzip)\b',
-            r'<span style="color:#d2a8ff">\1</span>', c)
-        c = re.sub(r'(#[^\n]*)', r'<span style="color:#8b949e">\1</span>', c)
-        c = re.sub(r'(\$\w+|\$\{[^}]+\})', r'<span style="color:#79c0ff">\1</span>', c)
-        c = re.sub(
-            r'("([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\')',
-            r'<span style="color:#a5d6ff">\1</span>', c)
-
-    elif L == "json":
-        c = re.sub(r'"([^"]+)"\s*:', r'<span style="color:#79c0ff">"\1"</span>:', c)
-        c = re.sub(r':\s*"([^"]*)"', r': <span style="color:#a5d6ff">"\1"</span>', c)
-        c = re.sub(r'\b(true|false|null)\b', r'<span style="color:#ff7b72">\1</span>', c)
-        c = re.sub(r'\b(\d+\.?\d*)\b', r'<span style="color:#79c0ff">\1</span>', c)
-
-    elif L in ("html", "xml"):
-        c = re.sub(r'(&lt;\/?)([\w-]+)', r'\1<span style="color:#7ee787">\2</span>', c)
-        c = re.sub(r'([\w-]+)(=)', r'<span style="color:#79c0ff">\1</span>\2', c)
-        c = re.sub(r'(&quot;[^&]*&quot;)', r'<span style="color:#a5d6ff">\1</span>', c)
-        c = re.sub(r'(&lt;!--[\s\S]*?--&gt;)', r'<span style="color:#8b949e">\1</span>', c)
-
-    return c
-
-
-def _diff_colorize(code: str) -> str:
-    lines = _html.escape(code).split("\n")
-    out = []
-    for line in lines:
-        if line.startswith("+") and not line.startswith("+++"):
-            out.append(f'<span class="diff-add">{line}</span>')
-        elif line.startswith("-") and not line.startswith("---"):
-            out.append(f'<span class="diff-rem">{line}</span>')
-        elif line.startswith("@@"):
-            out.append(f'<span class="diff-info">{line}</span>')
-        else:
-            out.append(f'<span class="diff-ctx">{line}</span>')
-    return "\n".join(out)
-
-
-# ── 4. CODE BLOCK HTML ────────────────────────────────────────
-# FIX: use components.html() to bypass Streamlit's markdown processor entirely.
-# This prevents [object Object] and span-tag leakage into rendered output.
-
-_CODE_CSS = """
-<style>
-.code-wrap{position:relative;margin:.8rem 0;font-family:'JetBrains Mono','Fira Code','Cascadia Code',monospace}
-.code-wrap pre{background:#0d1117;border:1px solid #30363d;border-radius:8px;
-  padding:2.6rem 1rem 1rem 1rem;overflow-x:auto;font-size:.88rem;
-  line-height:1.65;margin:0;white-space:pre}
-.code-wrap code{background:transparent;border:none;padding:0;
-  color:#e6edf3;font-size:inherit;white-space:pre}
-.code-toolbar{position:absolute;top:0;left:0;right:0;display:flex;
-  align-items:center;justify-content:space-between;padding:5px 12px;
-  border-bottom:1px solid #21262d;background:#161b22;border-radius:8px 8px 0 0}
-.lang-badge{font-size:.72rem;font-family:monospace;text-transform:uppercase;
-  font-weight:600;letter-spacing:.05em}
-.copy-btn{font-size:.72rem;background:#21262d;color:#8b949e;border:1px solid #30363d;
-  border-radius:4px;padding:2px 10px;cursor:pointer;transition:all .15s}
-.copy-btn:hover{background:#388bfd22;color:#58a6ff;border-color:#388bfd}
-body{margin:0;padding:0;background:transparent}
-</style>
-"""
-
-_CODE_JS = """
-<script>
-function copyCode(id){
-  var el=document.getElementById(id);
-  if(!el) return;
-  navigator.clipboard.writeText(el.innerText).then(function(){
-    var btn=document.querySelector('[data-copy="'+id+'"]');
-    if(btn){btn.innerText='Copied!';setTimeout(function(){btn.innerText='Copy'},2000);}
-  });
+# ── 3. CALLOUT DETECTOR ───────────────────────────────────────
+CALLOUT_MAP = {
+    "warning":("warning","⚠️"), "tip":("tip","💡"),
+    "info":("info","ℹ️"),       "note":("info","📝"),
+    "success":("success","✅"), "error":("error","❌"),
+    "danger":("error","🚨"),
 }
-</script>
-"""
-
-def _render_code_block(code: str, lang: str):
-    """Render a syntax-highlighted code block via components.html()
-    to fully bypass Streamlit's markdown/HTML processor."""
-    global _COPY_CTR
-    _COPY_CTR += 1
-    cid   = f"cb_{_COPY_CTR}"
-    color = LANG_COLORS.get(lang.lower(), "#8b949e")
-    badge = lang.upper() if lang else "CODE"
-    highlighted = _diff_colorize(code) if lang.lower() == "diff" else _colorize(code, lang)
-
-    html = (
-        _CODE_CSS
-        + f'<div class="code-wrap">'
-        f'<div class="code-toolbar">'
-        f'<span class="lang-badge" style="color:{color}">{badge}</span>'
-        f'<button class="copy-btn" data-copy="{cid}" onclick="copyCode(\'{cid}\')">'
-        f'Copy</button></div>'
-        f'<pre><code id="{cid}">{highlighted}</code></pre>'
-        f'</div>'
-        + _CODE_JS
-    )
-
-    # Height: ~22px per line + 80px toolbar overhead, minimum 100px
-    line_count = code.count('\n') + 1
-    height = max(100, line_count * 22 + 80)
-    components.html(html, height=height, scrolling=False)
-
-
-def _mermaid_html(code: str) -> str:
-    escaped = _html.escape(code)
-    return f'<pre class="mermaid-src" style="display:none">{escaped}</pre>'
-
-
-# ── 5. CALLOUT DETECTOR ───────────────────────────────────────
+CALLOUT_EMOJI = {
+    "⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error",
+}
 
 _CALLOUT_LINE_RE = re.compile(
     r'^>\s*'
@@ -733,8 +477,7 @@ def _try_callout(line: str):
             f'<span>{_html.escape(body)}</span></div>')
 
 
-# ── 6. JSON/CSV → dataframe ───────────────────────────────────
-
+# ── 4. JSON/CSV → dataframe ───────────────────────────────────
 def _try_render_data(code: str, lang: str) -> bool:
     import pandas as pd
     if lang.lower() == "json":
@@ -755,7 +498,12 @@ def _try_render_data(code: str, lang: str) -> bool:
     return False
 
 
-# ── 7. MARKDOWN TABLE → HTML ──────────────────────────────────
+# ── 5. MARKDOWN TABLE → HTML ──────────────────────────────────
+_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+
+def _strip_bold(text: str) -> str:
+    """Convert **bold** markers to plain text for HTML table cells."""
+    return _BOLD_RE.sub(r'\1', text.strip())
 
 def _md_tables_to_html(text: str) -> str:
     lines, output, i = text.split("\n"), [], 0
@@ -767,14 +515,14 @@ def _md_tables_to_html(text: str) -> str:
                 table_lines.append(lines[i])
                 i += 1
             if len(table_lines) >= 2:
-                header_cells = [c.strip() for c in table_lines[0].split("|") if c.strip()]
+                header_cells = [_strip_bold(c) for c in table_lines[0].split("|") if c.strip()]
                 html = ("<table><thead><tr>"
-                        + "".join(f"<th>{c}</th>" for c in header_cells)
+                        + "".join(f"<th>{_html.escape(c)}</th>" for c in header_cells)
                         + "</tr></thead><tbody>")
                 for row_line in table_lines[2:]:
-                    cells = [c.strip() for c in row_line.split("|") if c.strip()]
+                    cells = [_strip_bold(c) for c in row_line.split("|") if c.strip()]
                     if cells:
-                        html += "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+                        html += "<tr>" + "".join(f"<td>{_html.escape(c)}</td>" for c in cells) + "</tr>"
                 html += "</tbody></table>"
                 output.append(html)
             else:
@@ -785,22 +533,31 @@ def _md_tables_to_html(text: str) -> str:
     return "\n".join(output)
 
 
-# ── 8. MASTER SPLITTER ────────────────────────────────────────
-# Splits ONLY on fenced code blocks and display $$…$$ math.
-# Inline $…$ stays inside prose so it renders inline without fragmentation.
-
+# ── 6. MASTER SPLITTER ────────────────────────────────────────
 _SPLIT_RE = re.compile(
-    r'(```[\w]*\n?[\s\S]*?```'   # fenced code block  (highest priority)
+    r'(```[\w]*\n?[\s\S]*?```'   # fenced code block
     r'|\$\$[\s\S]*?\$\$'         # display math block only
     r')',
     re.DOTALL,
 )
 
+# Map common language aliases to ones Streamlit/Pygments recognises
+_LANG_ALIASES = {
+    "js": "javascript",
+    "ts": "typescript",
+    "sh": "bash",
+    "shell": "bash",
+    "py": "python",
+}
 
-# ── 9. MASTER RENDERER ───────────────────────────────────────
+def _canon_lang(lang: str) -> str:
+    return _LANG_ALIASES.get(lang.lower(), lang.lower())
+
+
+# ── 7. MASTER RENDERER ────────────────────────────────────────
 
 def render_response(text: str):
-    """Full professional render — Qwen-compatible."""
+    """Full professional render — no components.html, no mermaid."""
 
     # Step 0: normalise Qwen bare LaTeX → $…$ / $$…$$
     text = _normalise_latex(text)
@@ -818,7 +575,7 @@ def render_response(text: str):
     if not text.strip():
         return
 
-    # Step 2: split only on fenced blocks / display math
+    # Step 2: split on fenced blocks / display math
     parts = _SPLIT_RE.split(text)
 
     for part in parts:
@@ -831,18 +588,15 @@ def render_response(text: str):
             if not m:
                 st.code(part)
                 continue
-            lang = m.group(1).strip()
+            lang = _canon_lang(m.group(1).strip())
             code = m.group(2)
 
-            if lang.lower() == "mermaid":
-                st.markdown(_mermaid_html(code), unsafe_allow_html=True)
+            # JSON / CSV → interactive dataframe
+            if lang in ("json", "csv") and _try_render_data(code, lang):
                 continue
 
-            if lang.lower() in ("json", "csv") and _try_render_data(code, lang):
-                continue
-
-            # ── FIX: use components.html() — bypasses Streamlit markdown processor
-            _render_code_block(code, lang)
+            # Plain st.code — Streamlit's built-in Pygments highlighting
+            st.code(code, language=lang if lang else None)
 
         # ── Display math  $$ … $$ ──────────────────────────────
         elif part.startswith("$$") and part.endswith("$$"):
@@ -855,7 +609,7 @@ def render_response(text: str):
                         f'<div style="text-align:center;padding:.5rem 0">{part}</div>',
                         unsafe_allow_html=True)
 
-        # ── Prose / markdown (inline $…$ handled by KaTeX MutationObserver) ──
+        # ── Prose / markdown ───────────────────────────────────
         else:
             lines, plain_batch = part.split("\n"), []
 
@@ -878,22 +632,13 @@ def render_response(text: str):
             _flush()
 
 
-# ── 10. STREAMING RENDER ─────────────────────────────────────
-# FIX: removed _RERENDER_JS injection — the KaTeX MutationObserver
-# in the global CSS block handles re-rendering automatically.
-
+# ── 8. STREAMING RENDER ──────────────────────────────────────
 def render_streaming_chunk(text: str, placeholder):
-    """
-    Lightweight streaming render with Qwen LaTeX normalisation.
-    KaTeX MutationObserver re-renders math automatically on each DOM update.
-    """
     normalised = _normalise_latex(text)
-    # Strip unclosed <think> tags so they don't bleed into visible output
     normalised = re.sub(
         r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
         '', normalised, flags=re.IGNORECASE
     ).strip()
-    # Plain markdown — KaTeX observer fires on the DOM mutation automatically
     placeholder.markdown(normalised + " ▌", unsafe_allow_html=True)
 
 
@@ -1143,7 +888,7 @@ with tab_chat:
                             full_response += chunk.content
                             render_streaming_chunk(full_response, placeholder)
 
-                    # Final professional render — clears the streaming placeholder
+                    # Final professional render
                     placeholder.empty()
                     render_response(full_response)
 

@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from ddgs import DDGS
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -345,31 +346,81 @@ def _extract_think(text: str):
     return text, blocks
 
 # ──────────────────────────────────────────
-# Markdown table → HTML
+# Markdown table → rendered via components.html
+# (ensures KaTeX renders $…$ inside cells)
 # ──────────────────────────────────────────
-def _tables_to_html(text: str) -> str:
-    lines, out, i = text.split("\n"), [], 0
+import html as _html
+
+def _render_table(tbl_lines: list[str]):
+    """Render a markdown table with full KaTeX support inside cells."""
+    headers = [c.strip() for c in tbl_lines[0].split("|") if c.strip()]
+    rows = []
+    for row_line in tbl_lines[2:]:
+        cells = [c.strip() for c in row_line.split("|") if c.strip()]
+        if cells:
+            rows.append(cells)
+
+    th_html = "".join(f"<th>{_html.escape(h)}</th>" for h in headers)
+    tbody_html = ""
+    for cells in rows:
+        # Do NOT escape cell content — KaTeX needs raw $...$ to render math
+        tbody_html += "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+
+    full_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{{
+    delimiters:[
+      {{left:'$$',right:'$$',display:true}},
+      {{left:'$',right:'$',display:false}}
+    ],throwOnError:false}});"></script>
+<style>
+  body {{ margin:0; padding:0; background:transparent; font-family: sans-serif; font-size:14px; color:#e6edf3 }}
+  table {{ width:100%; border-collapse:collapse; }}
+  thead tr {{ background:#1a3a5c; color:#e6edf3; font-weight:700 }}
+  th, td {{ padding:8px 12px; text-align:left; border-bottom:1px solid #21262d; border-right:1px solid #21262d }}
+  th:last-child, td:last-child {{ border-right:none }}
+  tbody tr:nth-child(even) {{ background:#161b22 }}
+  tbody tr:hover {{ background:#1c2736 }}
+  .katex {{ font-size:1rem !important }}
+</style>
+</head>
+<body>
+<table>
+  <thead><tr>{th_html}</tr></thead>
+  <tbody>{tbody_html}</tbody>
+</table>
+</body>
+</html>"""
+
+    row_count = len(rows) + 1  # +1 for header
+    height = row_count * 42 + 20
+    components.html(full_html, height=height, scrolling=False)
+
+
+def _has_table(text: str) -> bool:
+    return any("|" in l and l.strip().startswith("|") for l in text.split("\n"))
+
+
+def _split_tables(text: str):
+    """Yield (is_table, lines_or_text) chunks."""
+    lines = text.split("\n")
+    i = 0
     while i < len(lines):
         if "|" in lines[i] and lines[i].strip().startswith("|"):
             tbl = []
             while i < len(lines) and "|" in lines[i]:
                 tbl.append(lines[i]); i += 1
-            if len(tbl) >= 2:
-                headers = [c.strip() for c in tbl[0].split("|") if c.strip()]
-                html = ("<table><thead><tr>"
-                        + "".join(f"<th>{h}</th>" for h in headers)
-                        + "</tr></thead><tbody>")
-                for row in tbl[2:]:
-                    cells = [c.strip() for c in row.split("|") if c.strip()]
-                    if cells:
-                        html += "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
-                html += "</tbody></table>"
-                out.append(html)
-            else:
-                out.extend(tbl)
-            continue
-        out.append(lines[i]); i += 1
-    return "\n".join(out)
+            yield (True, tbl)
+        else:
+            prose = []
+            while i < len(lines) and not ("|" in lines[i] and lines[i].strip().startswith("|")):
+                prose.append(lines[i]); i += 1
+            yield (False, "\n".join(prose))
 
 # ──────────────────────────────────────────
 # Renderer
@@ -377,8 +428,6 @@ def _tables_to_html(text: str) -> str:
 _SPLIT_RE = re.compile(r'(```[\w]*\n?[\s\S]*?```|\$\$[\s\S]*?\$\$)', re.DOTALL)
 
 def render_response(text: str):
-    import html as _html
-
     text = _normalise_latex(text)
     text, think_blocks = _extract_think(text)
 
@@ -414,11 +463,15 @@ def render_response(text: str):
                 except Exception:
                     st.markdown(part, unsafe_allow_html=True)
 
-        # Prose — inline $…$ handled by KaTeX MutationObserver
+        # Prose — split out tables and render each piece correctly
         else:
-            st.markdown(
-                f'<div style="line-height:1.75">{_tables_to_html(part)}</div>',
-                unsafe_allow_html=True)
+            for is_table, chunk in _split_tables(part):
+                if is_table and len(chunk) >= 2:
+                    _render_table(chunk)
+                elif chunk.strip():
+                    st.markdown(
+                        f'<div style="line-height:1.75">{chunk}</div>',
+                        unsafe_allow_html=True)
 
 
 def render_streaming(text: str, placeholder):
