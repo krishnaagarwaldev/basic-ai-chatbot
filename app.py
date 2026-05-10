@@ -522,8 +522,48 @@ def _strip_bold(text: str) -> str:
     """Convert **bold** markers to plain text for HTML table cells."""
     return _BOLD_RE.sub(r'\1', text.strip())
 
+# ── at top of file, after other imports ──────────────────────
+try:
+    import katex as _katex
+    _KATEX_AVAILABLE = True
+except ImportError:
+    _KATEX_AVAILABLE = False
+
+_MATH_SPAN_RE = re.compile(r'\$\$(.+?)\$\$|\$([^$\n]+?)\$', re.DOTALL)
+
+def _render_cell_math(raw: str) -> str:
+    """Escape HTML in non-math parts; server-render math parts via katex."""
+    raw = _BOLD_RE.sub(r'<b>\1</b>', raw.strip())
+    parts = _MATH_SPAN_RE.split(raw)
+    # split() with 2 groups gives: [text, grp1, grp2, text, grp1, grp2, ...]
+    result = ""
+    i = 0
+    while i < len(parts):
+        chunk = parts[i]
+        if chunk is None:
+            i += 1
+            continue
+        # Non-math text
+        if i % 3 == 0:
+            result += _html.escape(chunk)
+        else:
+            formula = chunk  # either display (grp1) or inline (grp2)
+            if _KATEX_AVAILABLE:
+                try:
+                    result += _katex.renderToString(
+                        formula.strip(),
+                        displayMode=False,
+                        throwOnError=False)
+                except Exception:
+                    result += _html.escape(f"${formula}$")
+            else:
+                # Fallback: keep delimiters for browser KaTeX
+                result += f"${_html.escape(formula)}$"
+        i += 1
+    return result
+
+
 def _md_tables_to_html(text: str) -> str:
-    """Convert markdown tables to HTML, preserving $...$ for KaTeX auto-render."""
     lines, output, i = text.split("\n"), [], 0
     while i < len(lines):
         line = lines[i]
@@ -533,27 +573,15 @@ def _md_tables_to_html(text: str) -> str:
                 table_lines.append(lines[i])
                 i += 1
             if len(table_lines) >= 2:
-                def _cell(raw: str) -> str:
-                    raw = _BOLD_RE.sub(r'\1', raw.strip())
-                    # Escape HTML but preserve $ delimiters for KaTeX
-                    # Split on $...$ to escape only non-math parts
-                    parts = re.split(r'(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)', raw)
-                    result = ""
-                    for p in parts:
-                        if p.startswith("$"):
-                            result += p          # keep math as-is for KaTeX
-                        else:
-                            result += _html.escape(p)
-                    return result
-
                 header_cells = [c for c in table_lines[0].split("|") if c.strip()]
                 html = ("<table><thead><tr>"
-                        + "".join(f"<th>{_cell(c)}</th>" for c in header_cells)
+                        + "".join(f"<th>{_render_cell_math(c)}</th>" for c in header_cells)
                         + "</tr></thead><tbody>")
                 for row_line in table_lines[2:]:
                     cells = [c for c in row_line.split("|") if c.strip()]
                     if cells:
-                        html += "<tr>" + "".join(f"<td>{_cell(c)}</td>" for c in cells) + "</tr>"
+                        html += "<tr>" + "".join(
+                            f"<td>{_render_cell_math(c)}</td>" for c in cells) + "</tr>"
                 html += "</tbody></table>"
                 output.append(html)
             else:
@@ -562,7 +590,6 @@ def _md_tables_to_html(text: str) -> str:
         output.append(line)
         i += 1
     return "\n".join(output)
-
 
 # ── 6. MASTER SPLITTER ────────────────────────────────────────
 _SPLIT_RE = re.compile(
