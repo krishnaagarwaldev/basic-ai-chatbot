@@ -699,13 +699,7 @@ def render_response(text: str):
         return
 
     # Step 2 — split on fenced blocks and $$...$$ math
-    SPLIT = re.compile(
-    r'(```[\w]*\n?[\s\S]*?```'
-    r'|\$\$[\s\S]*?\$\$'
-    r'|\\\[[\s\S]*?\\\]'
-    r'|\\\([\s\S]*?\\\))',
-    re.DOTALL
-    )
+    SPLIT = re.compile(r'(```[\w]*\n?[\s\S]*?```|\$\$[\s\S]*?\$\$)', re.DOTALL)
     parts = SPLIT.split(text)
 
     for part in parts:
@@ -731,17 +725,8 @@ def render_response(text: str):
             st.markdown(_code_block_html(code, lang), unsafe_allow_html=True)
 
         # ── Display math $$...$$ ───────────────────────────────
-        elif (
-            (part.startswith("$$") and part.endswith("$$")) or
-            (part.startswith("\\[") and part.endswith("\\]")) or
-            (part.startswith("\\(") and part.endswith("\\)"))
-        ):
-            formula = part
-
-            formula = formula.replace("\\[", "").replace("\\]", "")
-            formula = formula.replace("\\(", "").replace("\\)", "")
-            formula = formula.strip()
-
+        elif part.startswith("$$") and part.endswith("$$"):
+            formula = part[2:-2].strip()
             try:
                 st.latex(formula)
             except Exception:
