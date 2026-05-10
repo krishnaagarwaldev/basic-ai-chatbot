@@ -461,7 +461,6 @@ def build_augmented_prompt(query: str, results: str) -> str:
 
 import html as _html
 
-# Global copy-id counter (module-level, resets each run — fine for HTML IDs)
 _COPY_CTR = 0
 
 LANG_COLORS = {
@@ -483,7 +482,68 @@ CALLOUT_EMOJI = {
     "⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error",
 }
 
-# ── Syntax colourisers ────────────────────────────────────────
+# ── 1. LATEX NORMALISER ───────────────────────────────────────
+# Converts Qwen-style bare LaTeX to $…$ / $$…$$ delimiters
+
+_RAW_DISPLAY_RE = re.compile(
+    r'(?<!\$)'
+    r'(\\begin\{(?:equation|align|gather|multline)\*?'
+    r'\}[\s\S]*?\\end\{(?:equation|align|gather|multline)\*?\})',
+    re.DOTALL,
+)
+_RAW_BOXED_RE  = re.compile(r'(?<!\$)(\\boxed\{[^}]*\})(?!\$)')
+_RAW_FRAC_LINE = re.compile(
+    r'^(\s*)(\\frac\{[^}]*\}\{[^}]*\}'
+    r'(?:\s*[=+\-]?\s*\\frac\{[^}]*\}\{[^}]*\})*)\s*$',
+    re.MULTILINE,
+)
+_BRACKET_DISPLAY_RE = re.compile(r'\\\[([\s\S]*?)\\\]')
+_PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
+
+
+def _normalise_latex(text: str) -> str:
+    """Wrap bare LaTeX constructs that Qwen emits without $…$ delimiters."""
+    text = _BRACKET_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1).strip()}\n$$', text)
+    text = _PAREN_INLINE_RE.sub(lambda m: f'${m.group(1).strip()}$', text)
+    text = _RAW_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1)}\n$$', text)
+    text = _RAW_BOXED_RE.sub(lambda m: f'$${m.group(1)}$$', text)
+    text = _RAW_FRAC_LINE.sub(lambda m: f'{m.group(1)}$$\n{m.group(2)}\n$$', text)
+    return text
+
+
+# ── 2. THINK-BLOCK EXTRACTOR ──────────────────────────────────
+# Handles fully-closed AND unclosed/mid-stream <think> tags
+
+_THINK_CLOSED_RE = re.compile(
+    r'<(think|thinking|reasoning|scratchpad)>([\s\S]*?)<\/\1>',
+    re.IGNORECASE,
+)
+_THINK_OPEN_RE = re.compile(
+    r'<(think|thinking|reasoning|scratchpad)>([\s\S]*)',
+    re.IGNORECASE,
+)
+
+
+def _extract_think_blocks(text: str):
+    blocks: list[tuple[str, str]] = []
+
+    def _replace_closed(m):
+        blocks.append((m.group(1).capitalize(), m.group(2).strip()))
+        return ""
+
+    text = _THINK_CLOSED_RE.sub(_replace_closed, text).strip()
+
+    # Handle unclosed opening tag (streaming artefact from Qwen)
+    m = _THINK_OPEN_RE.search(text)
+    if m:
+        blocks.append((m.group(1).capitalize(), m.group(2).strip()))
+        text = text[: m.start()].strip()
+
+    return text, blocks
+
+
+# ── 3. SYNTAX COLOURISERS ─────────────────────────────────────
+
 def _colorize(code: str, lang: str) -> str:
     c = _html.escape(code)
     L = lang.lower()
@@ -572,7 +632,8 @@ def _diff_colorize(code: str) -> str:
     return "\n".join(out)
 
 
-# ── Code block HTML ───────────────────────────────────────────
+# ── 4. CODE BLOCK HTML ────────────────────────────────────────
+
 def _code_block_html(code: str, lang: str) -> str:
     global _COPY_CTR
     _COPY_CTR += 1
@@ -580,7 +641,6 @@ def _code_block_html(code: str, lang: str) -> str:
     color = LANG_COLORS.get(lang.lower(), "#8b949e")
     badge = lang.upper() if lang else "CODE"
     highlighted = _diff_colorize(code) if lang.lower() == "diff" else _colorize(code, lang)
-
     return (
         f'<div class="code-wrap">'
         f'<div class="code-toolbar">'
@@ -591,13 +651,13 @@ def _code_block_html(code: str, lang: str) -> str:
         f'</div>')
 
 
-# ── Mermaid block ─────────────────────────────────────────────
 def _mermaid_html(code: str) -> str:
     escaped = _html.escape(code)
     return f'<pre class="mermaid-src" style="display:none">{escaped}</pre>'
 
 
-# ── Callout detector ──────────────────────────────────────────
+# ── 5. CALLOUT DETECTOR ───────────────────────────────────────
+
 _CALLOUT_LINE_RE = re.compile(
     r'^>\s*'
     r'(?:(⚠️|💡|ℹ️|✅|❌|🚨)\s*)?'
@@ -618,7 +678,8 @@ def _try_callout(line: str):
             f'<span>{_html.escape(body)}</span></div>')
 
 
-# ── JSON/CSV → dataframe ──────────────────────────────────────
+# ── 6. JSON/CSV → dataframe ───────────────────────────────────
+
 def _try_render_data(code: str, lang: str) -> bool:
     import pandas as pd
     if lang.lower() == "json":
@@ -639,7 +700,8 @@ def _try_render_data(code: str, lang: str) -> bool:
     return False
 
 
-# ── Markdown table → HTML ─────────────────────────────────────
+# ── 7. MARKDOWN TABLE → HTML ──────────────────────────────────
+
 def _md_tables_to_html(text: str) -> str:
     lines, output, i = text.split("\n"), [], 0
     while i < len(lines):
@@ -668,24 +730,44 @@ def _md_tables_to_html(text: str) -> str:
     return "\n".join(output)
 
 
-# ── <think> extractor ─────────────────────────────────────────
-_THINK_RE = re.compile(
-    r'<(think|thinking|reasoning|scratchpad)>([\s\S]*?)<\/\1>', re.IGNORECASE)
+# ── 8. MASTER SPLITTER ────────────────────────────────────────
+# Fixed: non-greedy $$…$$ + handles inline $…$ (single-line only)
 
-def _extract_think_blocks(text: str):
-    blocks = []
-    def _replace(m):
-        blocks.append((m.group(1).capitalize(), m.group(2).strip()))
-        return ""
-    return _THINK_RE.sub(_replace, text).strip(), blocks
+_SPLIT_RE = re.compile(
+    r'(```[\w]*\n?[\s\S]*?```'   # fenced code block  (highest priority)
+    r'|\$\$[\s\S]*?\$\$'         # display math block
+    r'|\$[^\$\n]+?\$'            # inline math (single line)
+    r')',
+    re.DOTALL,
+)
 
 
-# ── MASTER RENDERER ───────────────────────────────────────────
+# ── 9. KaTeX RE-RENDER SCRIPT ────────────────────────────────
+# Injected after each streaming chunk so math updates in real-time
+
+_RERENDER_JS = (
+    '<script>(function(){'
+    'if(window.renderMathInElement){'
+    'renderMathInElement(document.body,{'
+    'delimiters:['
+    '{left:"$$",right:"$$",display:true},'
+    '{left:"$",right:"$",display:false},'
+    '{left:"\\\\[",right:"\\\\]",display:true},'
+    '{left:"\\\\(",right:"\\\\)",display:false}'
+    '],throwOnError:false});'
+    '}})()</script>'
+)
+
+
+# ── 10. MASTER RENDERER ───────────────────────────────────────
+
 def render_response(text: str):
-    """Full professional render: think blocks, mermaid, diff, callouts,
-    copy buttons, dataframes, KaTeX, tables."""
+    """Full professional render — Qwen-compatible."""
 
-    # Step 1 — pull out <think> blocks
+    # Step 0: normalise Qwen bare LaTeX → $…$ / $$…$$
+    text = _normalise_latex(text)
+
+    # Step 1: pull out <think> / <reasoning> blocks
     text, think_blocks = _extract_think_blocks(text)
     for label, content in think_blocks:
         st.markdown(
@@ -695,12 +777,11 @@ def render_response(text: str):
             f'</details>',
             unsafe_allow_html=True)
 
-    if not text:
+    if not text.strip():
         return
 
-    # Step 2 — split on fenced blocks and $$...$$ math
-    SPLIT = re.compile(r'(```[\w]*\n?[\s\S]*?```|\$\$[\s\S]*?\$\$)', re.DOTALL)
-    parts = SPLIT.split(text)
+    # Step 2: split on fenced blocks / display math / inline math
+    parts = _SPLIT_RE.split(text)
 
     for part in parts:
         if not part.strip():
@@ -724,13 +805,25 @@ def render_response(text: str):
 
             st.markdown(_code_block_html(code, lang), unsafe_allow_html=True)
 
-        # ── Display math $$...$$ ───────────────────────────────
+        # ── Display math  $$ … $$ ──────────────────────────────
         elif part.startswith("$$") and part.endswith("$$"):
             formula = part[2:-2].strip()
-            try:
-                st.latex(formula)
-            except Exception:
-                st.markdown(part, unsafe_allow_html=True)
+            if formula:
+                try:
+                    st.latex(formula)
+                except Exception:
+                    # Fallback: pass through to KaTeX auto-render
+                    st.markdown(
+                        f'<div style="text-align:center;padding:.5rem 0">{part}</div>',
+                        unsafe_allow_html=True)
+
+        # ── Inline math  $ … $ ────────────────────────────────
+        elif (part.startswith("$") and part.endswith("$")
+              and not part.startswith("$$") and "\n" not in part):
+            # Let KaTeX auto-render handle it inside a prose span
+            st.markdown(
+                f'<span style="line-height:1.75">{part}</span>',
+                unsafe_allow_html=True)
 
         # ── Prose / markdown ───────────────────────────────────
         else:
@@ -755,9 +848,20 @@ def render_response(text: str):
             _flush()
 
 
+# ── 11. STREAMING RENDER ──────────────────────────────────────
+
 def render_streaming_chunk(text: str, placeholder):
-    """Lightweight streaming render — raw markdown + cursor."""
-    placeholder.markdown(text + " ▌", unsafe_allow_html=True)
+    """
+    Lightweight streaming render with Qwen LaTeX normalisation.
+    Triggers KaTeX re-render after each chunk.
+    """
+    normalised = _normalise_latex(text)
+    # Strip unclosed <think> tags so they don't bleed into visible output
+    normalised = re.sub(
+        r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
+        '', normalised, flags=re.IGNORECASE
+    ).strip()
+    placeholder.markdown(normalised + " ▌" + _RERENDER_JS, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────
@@ -1006,7 +1110,7 @@ with tab_chat:
                             full_response += chunk.content
                             render_streaming_chunk(full_response, placeholder)
 
-                    # ★ Final professional render
+                    # Final professional render
                     placeholder.empty()
                     render_response(full_response)
 
