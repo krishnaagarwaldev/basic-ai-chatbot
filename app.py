@@ -19,7 +19,7 @@ st.set_page_config(page_title="AI Chatbot", page_icon="🤖", layout="wide")
 MODEL_REGISTRY = {
     "🦙 General Chat": {
         "meta-llama/Llama-3.1-8B-Instruct":  {"label": "Llama 3.1 8B",     "tags": ["chat","fast"],      "context": "128k", "desc": "Meta's best open chat model."},
-        "meta-llama/Llama-3.2-3B-Instruct":  {"label": "Llama 3.2 3B",     "tags": ["lightweight"],      "context": "128k", "desc": "Smallest Llama — fastest responses."},
+        # "meta-llama/Llama-3.2-3B-Instruct":  {"label": "Llama 3.2 3B",     "tags": ["lightweight"],      "context": "128k", "desc": "Smallest Llama — fastest responses."},
         # "mistralai/Mistral-7B-Instruct-v0.3": {"label": "Mistral 7B",        "tags": ["chat","efficient"], "context": "32k",  "desc": "Mistral's efficient 7B model."},
         # "mistralai/Mixtral-8x7B-Instruct-v0.1":{"label":"Mixtral 8x7B (MoE)","tags":["powerful","MoE"],  "context": "32k",  "desc": "Much stronger MoE architecture."},
     },
