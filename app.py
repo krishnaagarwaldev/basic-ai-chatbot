@@ -736,7 +736,7 @@ def _md_tables_to_html(text: str) -> str:
 _SPLIT_RE = re.compile(
     r'(```[\w]*\n?[\s\S]*?```'   # fenced code block  (highest priority)
     r'|\$\$[\s\S]*?\$\$'         # display math block
-    r'|\$[^\$\n]+?\$'            # inline math (single line)
+    # r'|\$[^\$\n]+?\$'            # inline math (single line)
     r')',
     re.DOTALL,
 )
@@ -745,18 +745,18 @@ _SPLIT_RE = re.compile(
 # ── 9. KaTeX RE-RENDER SCRIPT ────────────────────────────────
 # Injected after each streaming chunk so math updates in real-time
 
-_RERENDER_JS = (
-    '<script>(function(){'
-    'if(window.renderMathInElement){'
-    'renderMathInElement(document.body,{'
-    'delimiters:['
-    '{left:"$$",right:"$$",display:true},'
-    '{left:"$",right:"$",display:false},'
-    '{left:"\\\\[",right:"\\\\]",display:true},'
-    '{left:"\\\\(",right:"\\\\)",display:false}'
-    '],throwOnError:false});'
-    '}})()</script>'
-)
+# _RERENDER_JS = (
+#     '<script>(function(){'
+#     'if(window.renderMathInElement){'
+#     'renderMathInElement(document.body,{'
+#     'delimiters:['
+#     '{left:"$$",right:"$$",display:true},'
+#     '{left:"$",right:"$",display:false},'
+#     '{left:"\\\\[",right:"\\\\]",display:true},'
+#     '{left:"\\\\(",right:"\\\\)",display:false}'
+#     '],throwOnError:false});'
+#     '}})()</script>'
+# )
 
 
 # ── 10. MASTER RENDERER ───────────────────────────────────────
@@ -818,12 +818,12 @@ def render_response(text: str):
                         unsafe_allow_html=True)
 
         # ── Inline math  $ … $ ────────────────────────────────
-        elif (part.startswith("$") and part.endswith("$")
-              and not part.startswith("$$") and "\n" not in part):
-            # Let KaTeX auto-render handle it inside a prose span
-            st.markdown(
-                f'<span style="line-height:1.75">{part}</span>',
-                unsafe_allow_html=True)
+        # elif (part.startswith("$") and part.endswith("$")
+        #       and not part.startswith("$$") and "\n" not in part):
+        #     # Let KaTeX auto-render handle it inside a prose span
+        #     st.markdown(
+        #         f'<span style="line-height:1.75">{part}</span>',
+        #         unsafe_allow_html=True)
 
         # ── Prose / markdown ───────────────────────────────────
         else:
@@ -861,7 +861,11 @@ def render_streaming_chunk(text: str, placeholder):
         r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
         '', normalised, flags=re.IGNORECASE
     ).strip()
-    placeholder.markdown(normalised + " ▌" + _RERENDER_JS, unsafe_allow_html=True)
+    # placeholder.markdown(normalised + " ▌" + _RERENDER_JS, unsafe_allow_html=True)
+    placeholder.markdown(
+        f'<div class="latex-stream">{normalised} ▌</div>',
+        unsafe_allow_html=True
+    )
 
 
 # ──────────────────────────────────────────
