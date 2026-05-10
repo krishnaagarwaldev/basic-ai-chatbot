@@ -410,11 +410,28 @@ _PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
 
 
 def _normalise_latex(text: str) -> str:
+    # Convert \[...\] → $$...$$  and  \(...\) → $...$
     text = _BRACKET_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1).strip()}\n$$', text)
     text = _PAREN_INLINE_RE.sub(lambda m: f'${m.group(1).strip()}$', text)
     text = _RAW_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1)}\n$$', text)
     text = _RAW_BOXED_RE.sub(lambda m: f'$${m.group(1)}$$', text)
     text = _RAW_FRAC_LINE.sub(lambda m: f'{m.group(1)}$$\n{m.group(2)}\n$$', text)
+
+    # ★ NEW: if $$ block is inside a table row (line contains |), flatten to inline $
+    def _flatten_display_in_table(m):
+        formula = m.group(1).strip()
+        # Check surrounding context: if the preceding line has |, use inline
+        return f'${formula}$'
+
+    lines = text.split('\n')
+    result = []
+    for line in lines:
+        if '|' in line:
+            # Replace any $$...$$ on this line with $...$
+            line = re.sub(r'\$\$(.*?)\$\$', lambda m: f'${m.group(1).strip()}$', line)
+        result.append(line)
+    text = '\n'.join(result)
+
     return text
 
 
@@ -506,6 +523,7 @@ def _strip_bold(text: str) -> str:
     return _BOLD_RE.sub(r'\1', text.strip())
 
 def _md_tables_to_html(text: str) -> str:
+    """Convert markdown tables to HTML, preserving $...$ for KaTeX auto-render."""
     lines, output, i = text.split("\n"), [], 0
     while i < len(lines):
         line = lines[i]
@@ -515,14 +533,27 @@ def _md_tables_to_html(text: str) -> str:
                 table_lines.append(lines[i])
                 i += 1
             if len(table_lines) >= 2:
-                header_cells = [_strip_bold(c) for c in table_lines[0].split("|") if c.strip()]
+                def _cell(raw: str) -> str:
+                    raw = _BOLD_RE.sub(r'\1', raw.strip())
+                    # Escape HTML but preserve $ delimiters for KaTeX
+                    # Split on $...$ to escape only non-math parts
+                    parts = re.split(r'(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)', raw)
+                    result = ""
+                    for p in parts:
+                        if p.startswith("$"):
+                            result += p          # keep math as-is for KaTeX
+                        else:
+                            result += _html.escape(p)
+                    return result
+
+                header_cells = [c for c in table_lines[0].split("|") if c.strip()]
                 html = ("<table><thead><tr>"
-                        + "".join(f"<th>{_html.escape(c)}</th>" for c in header_cells)
+                        + "".join(f"<th>{_cell(c)}</th>" for c in header_cells)
                         + "</tr></thead><tbody>")
                 for row_line in table_lines[2:]:
-                    cells = [_strip_bold(c) for c in row_line.split("|") if c.strip()]
+                    cells = [c for c in row_line.split("|") if c.strip()]
                     if cells:
-                        html += "<tr>" + "".join(f"<td>{_html.escape(c)}</td>" for c in cells) + "</tr>"
+                        html += "<tr>" + "".join(f"<td>{_cell(c)}</td>" for c in cells) + "</tr>"
                 html += "</tbody></table>"
                 output.append(html)
             else:
