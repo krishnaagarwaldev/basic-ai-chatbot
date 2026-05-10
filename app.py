@@ -24,24 +24,13 @@ st.markdown(r"""
   href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
-  onload="
-    renderMathInElement(document.body,{
-      delimiters:[
-        {left:'$$',right:'$$',display:true},
-        {left:'$', right:'$', display:false},
-        {left:'\\[',right:'\\]',display:true},
-        {left:'\\(',right:'\\)',display:false}
-      ],throwOnError:false});
-    new MutationObserver(function(){
-      renderMathInElement(document.body,{
-        delimiters:[
-          {left:'$$',right:'$$',display:true},
-          {left:'$', right:'$', display:false},
-          {left:'\\[',right:'\\]',display:true},
-          {left:'\\(',right:'\\)',display:false}
-        ],throwOnError:false});
-    }).observe(document.body,{childList:true,subtree:true});
-  "></script>
+  onload="renderMathInElement(document.body,{
+    delimiters:[
+      {left:'$$',right:'$$',display:true},
+      {left:'$', right:'$', display:false},
+      {left:'\\[',right:'\\]',display:true},
+      {left:'\\(',right:'\\)',display:false}
+    ],throwOnError:false});"></script>
 
 <!-- Mermaid -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
@@ -87,11 +76,10 @@ function copyCode(id){
   border-radius:8px!important;padding:2.6rem 1rem 1rem 1rem!important;
   overflow-x:auto!important;
   font-family:'JetBrains Mono','Fira Code','Cascadia Code',monospace!important;
-  font-size:.88rem!important;line-height:1.65!important;margin:0;white-space:pre!important}
+  font-size:.88rem!important;line-height:1.65!important;margin:0}
 .code-wrap code{
   background:transparent!important;border:none!important;
-  padding:0!important;color:#e6edf3!important;font-size:inherit!important;
-  white-space:pre!important}
+  padding:0!important;color:#e6edf3!important;font-size:inherit!important}
 .code-toolbar{
   position:absolute;top:0;left:0;right:0;
   display:flex;align-items:center;justify-content:space-between;
@@ -495,6 +483,8 @@ CALLOUT_EMOJI = {
 }
 
 # ── 1. LATEX NORMALISER ───────────────────────────────────────
+# Converts Qwen-style bare LaTeX to $…$ / $$…$$ delimiters
+
 _RAW_DISPLAY_RE = re.compile(
     r'(?<!\$)'
     r'(\\begin\{(?:equation|align|gather|multline)\*?'
@@ -522,6 +512,8 @@ def _normalise_latex(text: str) -> str:
 
 
 # ── 2. THINK-BLOCK EXTRACTOR ──────────────────────────────────
+# Handles fully-closed AND unclosed/mid-stream <think> tags
+
 _THINK_CLOSED_RE = re.compile(
     r'<(think|thinking|reasoning|scratchpad)>([\s\S]*?)<\/\1>',
     re.IGNORECASE,
@@ -541,6 +533,7 @@ def _extract_think_blocks(text: str):
 
     text = _THINK_CLOSED_RE.sub(_replace_closed, text).strip()
 
+    # Handle unclosed opening tag (streaming artefact from Qwen)
     m = _THINK_OPEN_RE.search(text)
     if m:
         blocks.append((m.group(1).capitalize(), m.group(2).strip()))
@@ -552,7 +545,6 @@ def _extract_think_blocks(text: str):
 # ── 3. SYNTAX COLOURISERS ─────────────────────────────────────
 
 def _colorize(code: str, lang: str) -> str:
-    # ── FIX: escape HTML first so < > & are safe, then inject spans ──
     c = _html.escape(code)
     L = lang.lower()
 
@@ -563,7 +555,6 @@ def _colorize(code: str, lang: str) -> str:
             r'yield|raise|assert|del|global|nonlocal|and|or|not|in|is|'
             r'True|False|None|async|await)\b',
             r'<span style="color:#ff7b72">\1</span>', c)
-        # strings — must run before comment regex to avoid // inside strings
         c = re.sub(
             r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')',
             r'<span style="color:#a5d6ff">\1</span>', c)
@@ -642,68 +633,22 @@ def _diff_colorize(code: str) -> str:
 
 
 # ── 4. CODE BLOCK HTML ────────────────────────────────────────
-# FIX: use components.html() to bypass Streamlit's markdown processor entirely.
-# This prevents [object Object] and span-tag leakage into rendered output.
 
-_CODE_CSS = """
-<style>
-.code-wrap{position:relative;margin:.8rem 0;font-family:'JetBrains Mono','Fira Code','Cascadia Code',monospace}
-.code-wrap pre{background:#0d1117;border:1px solid #30363d;border-radius:8px;
-  padding:2.6rem 1rem 1rem 1rem;overflow-x:auto;font-size:.88rem;
-  line-height:1.65;margin:0;white-space:pre}
-.code-wrap code{background:transparent;border:none;padding:0;
-  color:#e6edf3;font-size:inherit;white-space:pre}
-.code-toolbar{position:absolute;top:0;left:0;right:0;display:flex;
-  align-items:center;justify-content:space-between;padding:5px 12px;
-  border-bottom:1px solid #21262d;background:#161b22;border-radius:8px 8px 0 0}
-.lang-badge{font-size:.72rem;font-family:monospace;text-transform:uppercase;
-  font-weight:600;letter-spacing:.05em}
-.copy-btn{font-size:.72rem;background:#21262d;color:#8b949e;border:1px solid #30363d;
-  border-radius:4px;padding:2px 10px;cursor:pointer;transition:all .15s}
-.copy-btn:hover{background:#388bfd22;color:#58a6ff;border-color:#388bfd}
-body{margin:0;padding:0;background:transparent}
-</style>
-"""
-
-_CODE_JS = """
-<script>
-function copyCode(id){
-  var el=document.getElementById(id);
-  if(!el) return;
-  navigator.clipboard.writeText(el.innerText).then(function(){
-    var btn=document.querySelector('[data-copy="'+id+'"]');
-    if(btn){btn.innerText='Copied!';setTimeout(function(){btn.innerText='Copy'},2000);}
-  });
-}
-</script>
-"""
-
-def _render_code_block(code: str, lang: str):
-    """Render a syntax-highlighted code block via components.html()
-    to fully bypass Streamlit's markdown/HTML processor."""
+def _code_block_html(code: str, lang: str) -> str:
     global _COPY_CTR
     _COPY_CTR += 1
     cid   = f"cb_{_COPY_CTR}"
     color = LANG_COLORS.get(lang.lower(), "#8b949e")
     badge = lang.upper() if lang else "CODE"
     highlighted = _diff_colorize(code) if lang.lower() == "diff" else _colorize(code, lang)
-
-    html = (
-        _CODE_CSS
-        + f'<div class="code-wrap">'
+    return (
+        f'<div class="code-wrap">'
         f'<div class="code-toolbar">'
         f'<span class="lang-badge" style="color:{color}">{badge}</span>'
         f'<button class="copy-btn" data-copy="{cid}" onclick="copyCode(\'{cid}\')">'
         f'Copy</button></div>'
         f'<pre><code id="{cid}">{highlighted}</code></pre>'
-        f'</div>'
-        + _CODE_JS
-    )
-
-    # Height: ~22px per line + 80px toolbar overhead, minimum 100px
-    line_count = code.count('\n') + 1
-    height = max(100, line_count * 22 + 80)
-    components.html(html, height=height, scrolling=False)
+        f'</div>')
 
 
 def _mermaid_html(code: str) -> str:
@@ -786,18 +731,35 @@ def _md_tables_to_html(text: str) -> str:
 
 
 # ── 8. MASTER SPLITTER ────────────────────────────────────────
-# Splits ONLY on fenced code blocks and display $$…$$ math.
-# Inline $…$ stays inside prose so it renders inline without fragmentation.
+# Fixed: non-greedy $$…$$ + handles inline $…$ (single-line only)
 
 _SPLIT_RE = re.compile(
     r'(```[\w]*\n?[\s\S]*?```'   # fenced code block  (highest priority)
-    r'|\$\$[\s\S]*?\$\$'         # display math block only
+    r'|\$\$[\s\S]*?\$\$'         # display math block
+    # r'|\$[^\$\n]+?\$'            # inline math (single line)
     r')',
     re.DOTALL,
 )
 
 
-# ── 9. MASTER RENDERER ───────────────────────────────────────
+# ── 9. KaTeX RE-RENDER SCRIPT ────────────────────────────────
+# Injected after each streaming chunk so math updates in real-time
+
+# _RERENDER_JS = (
+#     '<script>(function(){'
+#     'if(window.renderMathInElement){'
+#     'renderMathInElement(document.body,{'
+#     'delimiters:['
+#     '{left:"$$",right:"$$",display:true},'
+#     '{left:"$",right:"$",display:false},'
+#     '{left:"\\\\[",right:"\\\\]",display:true},'
+#     '{left:"\\\\(",right:"\\\\)",display:false}'
+#     '],throwOnError:false});'
+#     '}})()</script>'
+# )
+
+
+# ── 10. MASTER RENDERER ───────────────────────────────────────
 
 def render_response(text: str):
     """Full professional render — Qwen-compatible."""
@@ -818,7 +780,7 @@ def render_response(text: str):
     if not text.strip():
         return
 
-    # Step 2: split only on fenced blocks / display math
+    # Step 2: split on fenced blocks / display math / inline math
     parts = _SPLIT_RE.split(text)
 
     for part in parts:
@@ -841,8 +803,7 @@ def render_response(text: str):
             if lang.lower() in ("json", "csv") and _try_render_data(code, lang):
                 continue
 
-            # ── FIX: use components.html() — bypasses Streamlit markdown processor
-            _render_code_block(code, lang)
+            st.markdown(_code_block_html(code, lang), unsafe_allow_html=True)
 
         # ── Display math  $$ … $$ ──────────────────────────────
         elif part.startswith("$$") and part.endswith("$$"):
@@ -851,11 +812,20 @@ def render_response(text: str):
                 try:
                     st.latex(formula)
                 except Exception:
+                    # Fallback: pass through to KaTeX auto-render
                     st.markdown(
                         f'<div style="text-align:center;padding:.5rem 0">{part}</div>',
                         unsafe_allow_html=True)
 
-        # ── Prose / markdown (inline $…$ handled by KaTeX MutationObserver) ──
+        # ── Inline math  $ … $ ────────────────────────────────
+        # elif (part.startswith("$") and part.endswith("$")
+        #       and not part.startswith("$$") and "\n" not in part):
+        #     # Let KaTeX auto-render handle it inside a prose span
+        #     st.markdown(
+        #         f'<span style="line-height:1.75">{part}</span>',
+        #         unsafe_allow_html=True)
+
+        # ── Prose / markdown ───────────────────────────────────
         else:
             lines, plain_batch = part.split("\n"), []
 
@@ -878,14 +848,12 @@ def render_response(text: str):
             _flush()
 
 
-# ── 10. STREAMING RENDER ─────────────────────────────────────
-# FIX: removed _RERENDER_JS injection — the KaTeX MutationObserver
-# in the global CSS block handles re-rendering automatically.
+# ── 11. STREAMING RENDER ──────────────────────────────────────
 
 def render_streaming_chunk(text: str, placeholder):
     """
     Lightweight streaming render with Qwen LaTeX normalisation.
-    KaTeX MutationObserver re-renders math automatically on each DOM update.
+    Triggers KaTeX re-render after each chunk.
     """
     normalised = _normalise_latex(text)
     # Strip unclosed <think> tags so they don't bleed into visible output
@@ -893,8 +861,11 @@ def render_streaming_chunk(text: str, placeholder):
         r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
         '', normalised, flags=re.IGNORECASE
     ).strip()
-    # Plain markdown — KaTeX observer fires on the DOM mutation automatically
-    placeholder.markdown(normalised + " ▌", unsafe_allow_html=True)
+    # placeholder.markdown(normalised + " ▌" + _RERENDER_JS, unsafe_allow_html=True)
+    placeholder.markdown(
+        f'<div class="latex-stream">{normalised} ▌</div>',
+        unsafe_allow_html=True
+    )
 
 
 # ──────────────────────────────────────────
@@ -1143,7 +1114,7 @@ with tab_chat:
                             full_response += chunk.content
                             render_streaming_chunk(full_response, placeholder)
 
-                    # Final professional render — clears the streaming placeholder
+                    # Final professional render
                     placeholder.empty()
                     render_response(full_response)
 
