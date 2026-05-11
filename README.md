@@ -2,6 +2,8 @@
 
 A feature-rich, multi-model AI chatbot built with **Streamlit**, **LangChain**, and **Hugging Face** — supporting math rendering, web search, file uploads, multi-session chat, and more.
 
+Live demo : [https://basic-ai-chatbot.streamlit.app/](https://basic-ai-chatbot.streamlit.app/)
+
 ---
 
 ## ✨ Features
