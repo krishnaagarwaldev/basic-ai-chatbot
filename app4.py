@@ -367,8 +367,10 @@ def build_augmented_prompt(query: str, results: str) -> str:
 import html as _html
 
 # ── 1. LATEX NORMALISER ───────────────────────────────────────
+# Converts bare \[...\] and \(...\) to $$...$$ and $...$
 _BRACKET_DISPLAY_RE = re.compile(r'\\\[([\s\S]*?)\\\]')
 _PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
+# Converts bare \begin{equation}...\end{equation} to $$...$$
 _RAW_DISPLAY_RE = re.compile(
     r'(?<!\$)'
     r'(\\begin\{(?:equation|align|gather|multline)\*?'
@@ -401,10 +403,12 @@ def _extract_think_blocks(text: str):
         return ""
 
     text = _THINK_CLOSED_RE.sub(_replace_closed, text).strip()
+
     m = _THINK_OPEN_RE.search(text)
     if m:
         blocks.append((m.group(1).capitalize(), m.group(2).strip()))
         text = text[: m.start()].strip()
+
     return text, blocks
 
 
@@ -415,10 +419,10 @@ CALLOUT_MAP = {
     "success":("success","✅"), "error":("error","❌"),
     "danger":("error","🚨"),
 }
-_EMOJI_TO_KEY = {"⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error"}
 
 _CALLOUT_LINE_RE = re.compile(
-    r'^>\s*(?:(⚠️|💡|ℹ️|✅|❌|🚨)\s*)?'
+    r'^>\s*'
+    r'(?:(⚠️|💡|ℹ️|✅|❌|🚨)\s*)?'
     r'(?:\*\*)?(?:(warning|tip|info|note|success|error|danger))(?:\*\*)?\s*[:\-]?\s*(.*)',
     re.IGNORECASE)
 
@@ -429,6 +433,8 @@ def _try_callout(line: str):
     emoji_raw = (m.group(1) or "").strip()
     label_raw = (m.group(2) or "").strip().lower()
     body      = (m.group(3) or "").strip()
+    # Determine callout type from label; fall back to emoji mapping
+    _EMOJI_TO_KEY = {"⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error"}
     key = label_raw or _EMOJI_TO_KEY.get(emoji_raw, "")
     cls, icon = CALLOUT_MAP.get(key, ("info", "ℹ️"))
     return (f'<div class="callout {cls}">'
@@ -436,98 +442,7 @@ def _try_callout(line: str):
             f'<span>{_html.escape(body)}</span></div>')
 
 
-# ── 4. TABLE SANITISER ────────────────────────────────────────
-# Models like Qwen 7B sometimes produce malformed tables where:
-#   • <br> tags appear inside cells (should be a space or newline)
-#   • raw LaTeX appears without $ delimiters
-#   • pipe rows are mixed with loose display math lines
-#
-# Strategy: detect table blocks, sanitise each cell individually,
-# then re-emit as clean markdown. KaTeX auto-render processes
-# the $ delimiters after st.markdown outputs the HTML.
-
-# Detects if a line looks like a table row (starts and ends with |, or
-# has at least 2 pipes and is not a separator row of dashes)
-_TABLE_ROW_RE  = re.compile(r'^\s*\|.*\|\s*$')
-_TABLE_SEP_RE  = re.compile(r'^\s*\|[\s\|\-:]+\|\s*$')
-
-# Bare LaTeX heuristics: a cell contains LaTeX commands but no $ wrapping
-_BARE_LATEX_RE = re.compile(
-    r'(?:^|(?<!\$))'           # not already inside $
-    r'((?:\\[a-zA-Z]+\{[^}]*\}|\\[a-zA-Z]+)'  # \cmd{} or \cmd
-    r'(?:[^$\n]*(?:\\[a-zA-Z]+\{[^}]*\}|\\[a-zA-Z]+))*)'  # more latex
-    r'(?:(?!\$)|$)'
-)
-
-def _wrap_bare_latex_cell(cell: str) -> str:
-    """If a table cell contains bare LaTeX (no $ delimiters), wrap it."""
-    cell = cell.strip()
-    # Already has $ delimiters → leave alone
-    if '$' in cell:
-        return cell
-    # Contains LaTeX commands → wrap as inline math
-    if re.search(r'\\[a-zA-Z]', cell):
-        return f'${cell}$'
-    return cell
-
-def _sanitise_table_block(table_lines: list[str]) -> str:
-    """
-    Clean a block of markdown table lines:
-      1. Replace <br> / <br/> with a space (keeps cell on one line)
-      2. Wrap bare LaTeX cells in $ ... $
-      3. Drop lines that are pure display math ($$...$$) — these
-         escaped the table and should be rendered separately below
-    Return the cleaned markdown table string.
-    """
-    out = []
-    for line in table_lines:
-        # Replace HTML line breaks inside cells
-        line = re.sub(r'<br\s*/?>', ' ', line, flags=re.IGNORECASE)
-        # Skip lines that are actually display math that leaked out
-        if line.strip().startswith('$$') and line.strip().endswith('$$'):
-            out.append(line)  # keep as-is; splitter will handle it
-            continue
-        if _TABLE_SEP_RE.match(line):
-            out.append(line)
-            continue
-        if _TABLE_ROW_RE.match(line):
-            # Split on | , sanitise each cell
-            parts = line.split('|')
-            # parts[0] and parts[-1] are empty strings from leading/trailing |
-            cells = [_wrap_bare_latex_cell(p) for p in parts]
-            out.append('|'.join(cells))
-        else:
-            out.append(line)
-    return '\n'.join(out)
-
-
-def _preprocess_tables(text: str) -> str:
-    """
-    Walk through lines. When we find a table block, sanitise it.
-    Non-table lines pass through unchanged.
-    """
-    lines = text.split('\n')
-    result = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if _TABLE_ROW_RE.match(line):
-            # Collect the full table block
-            table_block = []
-            while i < len(lines) and (
-                _TABLE_ROW_RE.match(lines[i]) or
-                _TABLE_SEP_RE.match(lines[i])
-            ):
-                table_block.append(lines[i])
-                i += 1
-            result.append(_sanitise_table_block(table_block))
-        else:
-            result.append(line)
-            i += 1
-    return '\n'.join(result)
-
-
-# ── 5. JSON/CSV → dataframe ───────────────────────────────────
+# ── 4. JSON/CSV → dataframe ───────────────────────────────────
 def _try_render_data(code: str, lang: str) -> bool:
     import pandas as pd
     if lang.lower() == "json":
@@ -548,7 +463,10 @@ def _try_render_data(code: str, lang: str) -> bool:
     return False
 
 
-# ── 6. MASTER SPLITTER ────────────────────────────────────────
+# ── 5. MASTER SPLITTER ────────────────────────────────────────
+# Split only on fenced code blocks and display math ($$...$$)
+# Markdown tables are kept as-is so st.markdown can render them
+# AND KaTeX can process math inside cells.
 _SPLIT_RE = re.compile(
     r'(```[\w]*\n?[\s\S]*?```'   # fenced code block
     r'|\$\$[\s\S]*?\$\$'         # display math block
@@ -567,17 +485,14 @@ def _canon_lang(lang: str) -> str:
     return _LANG_ALIASES.get(lang.lower(), lang.lower())
 
 
-# ── 7. MASTER RENDERER ────────────────────────────────────────
+# ── 6. MASTER RENDERER ────────────────────────────────────────
 def render_response(text: str):
     """Render assistant response with math, code, callouts, and tables."""
 
-    # Step 0: normalise bare \[...\] and \(...\) → $$ / $
+    # Step 0: normalise bare LaTeX → $…$ / $$…$$
     text = _normalise_latex(text)
 
-    # Step 1: sanitise tables — fix <br> tags and bare LaTeX in cells
-    text = _preprocess_tables(text)
-
-    # Step 2: extract <think> / <reasoning> blocks
+    # Step 1: extract <think> / <reasoning> blocks
     text, think_blocks = _extract_think_blocks(text)
     for label, content in think_blocks:
         st.markdown(
@@ -590,7 +505,7 @@ def render_response(text: str):
     if not text.strip():
         return
 
-    # Step 3: split on fenced code blocks and display math
+    # Step 2: split on fenced code blocks and display math
     parts = _SPLIT_RE.split(text)
 
     for part in parts:
@@ -605,8 +520,11 @@ def render_response(text: str):
                 continue
             lang = _canon_lang(m.group(1).strip())
             code = m.group(2)
+
+            # JSON / CSV → interactive dataframe
             if lang in ("json", "csv") and _try_render_data(code, lang):
                 continue
+
             st.code(code, language=lang if lang else None)
 
         # ── Display math  $$ … $$ ──────────────────────────────
@@ -616,15 +534,18 @@ def render_response(text: str):
                 try:
                     st.latex(formula)
                 except Exception:
-                    st.markdown(part)
+                    st.markdown(part, unsafe_allow_html=True)
 
-        # ── Prose / markdown (tables, headers, bold, etc.) ────
+        # ── Prose / markdown (including tables) ───────────────
         else:
             lines, plain_batch = part.split("\n"), []
 
             def _flush():
                 nonlocal plain_batch
                 if plain_batch:
+                    # Pass markdown directly to st.markdown so:
+                    #   • Tables render natively (and KaTeX processes math in cells)
+                    #   • Bold, italic, headers work correctly
                     st.markdown("\n".join(plain_batch))
                     plain_batch = []
 
@@ -638,12 +559,10 @@ def render_response(text: str):
             _flush()
 
 
-# ── 8. STREAMING RENDER ──────────────────────────────────────
+# ── 7. STREAMING RENDER ──────────────────────────────────────
 def render_streaming_chunk(text: str, placeholder):
-    """Show normalised text while streaming; fix <br> and open think tags."""
+    """Show normalised text while streaming; strip open think tags."""
     normalised = _normalise_latex(text)
-    # Replace <br> tags so they don't show as raw HTML mid-stream
-    normalised = re.sub(r'<br\s*/?>', ' ', normalised, flags=re.IGNORECASE)
     # Remove any unclosed think block that is still streaming
     normalised = re.sub(
         r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
