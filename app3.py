@@ -47,7 +47,7 @@ st.markdown(r"""
 .katex{font-size:1.15rem!important}
 .katex-display{overflow-x:auto;padding:.5rem 0}
 
-/* Tables — keep as markdown so KaTeX can render math inside cells */
+/* Tables */
 table{width:100%!important;border-collapse:collapse!important;margin:1rem 0!important;
   font-size:.92rem!important;border-radius:8px!important;overflow:hidden!important;
   box-shadow:0 1px 8px rgba(0,0,0,.3)!important}
@@ -135,6 +135,11 @@ for _cat, _models in MODEL_REGISTRY.items():
     for _repo, _info in _models.items():
         ALL_MODELS[_repo] = {**_info, "category": _cat}
 
+COMPARE_MODELS = [
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+]
+
 ASSISTANT_MODES = {
     "General": """You are a helpful, concise AI assistant.
 Always format mathematical expressions using LaTeX:
@@ -195,6 +200,7 @@ def _init_state():
         "response_times":   [],
         "last_user_input":  "",
         "current_mode":     None,
+        "search_provider":  "DuckDuckGo",
         "active_model":     "meta-llama/Llama-3.1-8B-Instruct",
         "ratings":          {},
         "prompt_templates": {
@@ -287,13 +293,16 @@ with st.sidebar:
     st.divider()
     web_search_enabled = st.toggle("🌐 Web Search")
     if web_search_enabled:
+        search_provider   = st.selectbox("Search Provider", ["DuckDuckGo", "Wikipedia", "Both"])
+        st.session_state.search_provider = search_provider
         show_search_debug = st.toggle("Show Search Debug", value=False)
     else:
         show_search_debug = False
 
-    show_timestamps = st.toggle("🕐 Timestamps",      value=True)
-    show_stats      = st.toggle("📊 Response Stats",  value=True)
-    show_ratings    = st.toggle("⭐ Message Ratings", value=True)
+    compare_models_on = st.toggle("🆚 Compare Models")
+    show_timestamps   = st.toggle("🕐 Timestamps",      value=True)
+    show_stats        = st.toggle("📊 Response Stats",  value=True)
+    show_ratings      = st.toggle("⭐ Message Ratings", value=True)
 
     st.divider()
     if st.button("🗑️ Clear Chat", use_container_width=True):
@@ -340,7 +349,7 @@ def load_model(repo_id: str, temp: float, max_new_tokens: int):
     return ChatHuggingFace(llm=llm)
 
 # ──────────────────────────────────────────
-# Web Search (DuckDuckGo only)
+# Web Search
 # ──────────────────────────────────────────
 def search_duckduckgo(query: str, max_results: int = 6) -> str:
     try:
@@ -350,7 +359,24 @@ def search_duckduckgo(query: str, max_results: int = 6) -> str:
             return "No results found."
         return "\n\n".join(f"[{r['title']}]\n{r['body']}" for r in results if r.get("body"))
     except Exception as e:
-        return f"Search error: {e}"
+        return f"DuckDuckGo error: {e}"
+
+def search_wikipedia(query: str) -> str:
+    try:
+        import wikipedia
+        pages = wikipedia.search(query)
+        if not pages:
+            return "No Wikipedia results."
+        summary = wikipedia.summary(pages[0], sentences=5)
+        return f"[Wikipedia: {pages[0]}]\n{summary}"
+    except Exception as e:
+        return f"Wikipedia error: {e}"
+
+def web_search(query: str) -> str:
+    p = st.session_state.search_provider
+    if p == "Wikipedia": return search_wikipedia(query)
+    if p == "Both":      return search_wikipedia(query) + "\n\n" + search_duckduckgo(query)
+    return search_duckduckgo(query)
 
 def build_augmented_prompt(query: str, results: str) -> str:
     return (
@@ -367,21 +393,28 @@ def build_augmented_prompt(query: str, results: str) -> str:
 import html as _html
 
 # ── 1. LATEX NORMALISER ───────────────────────────────────────
-# Converts bare \[...\] and \(...\) to $$...$$ and $...$
-_BRACKET_DISPLAY_RE = re.compile(r'\\\[([\s\S]*?)\\\]')
-_PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
-# Converts bare \begin{equation}...\end{equation} to $$...$$
 _RAW_DISPLAY_RE = re.compile(
     r'(?<!\$)'
     r'(\\begin\{(?:equation|align|gather|multline)\*?'
     r'\}[\s\S]*?\\end\{(?:equation|align|gather|multline)\*?\})',
     re.DOTALL,
 )
+_RAW_BOXED_RE  = re.compile(r'(?<!\$)(\\boxed\{[^}]*\})(?!\$)')
+_RAW_FRAC_LINE = re.compile(
+    r'^(\s*)(\\frac\{[^}]*\}\{[^}]*\}'
+    r'(?:\s*[=+\-]?\s*\\frac\{[^}]*\}\{[^}]*\})*)\s*$',
+    re.MULTILINE,
+)
+_BRACKET_DISPLAY_RE = re.compile(r'\\\[([\s\S]*?)\\\]')
+_PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
+
 
 def _normalise_latex(text: str) -> str:
     text = _BRACKET_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1).strip()}\n$$', text)
     text = _PAREN_INLINE_RE.sub(lambda m: f'${m.group(1).strip()}$', text)
     text = _RAW_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1)}\n$$', text)
+    text = _RAW_BOXED_RE.sub(lambda m: f'$${m.group(1)}$$', text)
+    text = _RAW_FRAC_LINE.sub(lambda m: f'{m.group(1)}$$\n{m.group(2)}\n$$', text)
     return text
 
 
@@ -394,6 +427,7 @@ _THINK_OPEN_RE = re.compile(
     r'<(think|thinking|reasoning|scratchpad)>([\s\S]*)',
     re.IGNORECASE,
 )
+
 
 def _extract_think_blocks(text: str):
     blocks: list[tuple[str, str]] = []
@@ -419,6 +453,9 @@ CALLOUT_MAP = {
     "success":("success","✅"), "error":("error","❌"),
     "danger":("error","🚨"),
 }
+CALLOUT_EMOJI = {
+    "⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error",
+}
 
 _CALLOUT_LINE_RE = re.compile(
     r'^>\s*'
@@ -433,9 +470,7 @@ def _try_callout(line: str):
     emoji_raw = (m.group(1) or "").strip()
     label_raw = (m.group(2) or "").strip().lower()
     body      = (m.group(3) or "").strip()
-    # Determine callout type from label; fall back to emoji mapping
-    _EMOJI_TO_KEY = {"⚠️":"warning","💡":"tip","ℹ️":"info","✅":"success","❌":"error","🚨":"error"}
-    key = label_raw or _EMOJI_TO_KEY.get(emoji_raw, "")
+    key = label_raw or CALLOUT_EMOJI.get(emoji_raw, "")
     cls, icon = CALLOUT_MAP.get(key, ("info", "ℹ️"))
     return (f'<div class="callout {cls}">'
             f'<span class="callout-icon">{icon}</span>'
@@ -463,36 +498,71 @@ def _try_render_data(code: str, lang: str) -> bool:
     return False
 
 
-# ── 5. MASTER SPLITTER ────────────────────────────────────────
-# Split only on fenced code blocks and display math ($$...$$)
-# Markdown tables are kept as-is so st.markdown can render them
-# AND KaTeX can process math inside cells.
+# ── 5. MARKDOWN TABLE → HTML ──────────────────────────────────
+_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')
+
+def _strip_bold(text: str) -> str:
+    """Convert **bold** markers to plain text for HTML table cells."""
+    return _BOLD_RE.sub(r'\1', text.strip())
+
+def _md_tables_to_html(text: str) -> str:
+    lines, output, i = text.split("\n"), [], 0
+    while i < len(lines):
+        line = lines[i]
+        if "|" in line and line.strip().startswith("|"):
+            table_lines = []
+            while i < len(lines) and "|" in lines[i]:
+                table_lines.append(lines[i])
+                i += 1
+            if len(table_lines) >= 2:
+                header_cells = [_strip_bold(c) for c in table_lines[0].split("|") if c.strip()]
+                html = ("<table><thead><tr>"
+                        + "".join(f"<th>{_html.escape(c)}</th>" for c in header_cells)
+                        + "</tr></thead><tbody>")
+                for row_line in table_lines[2:]:
+                    cells = [_strip_bold(c) for c in row_line.split("|") if c.strip()]
+                    if cells:
+                        html += "<tr>" + "".join(f"<td>{_html.escape(c)}</td>" for c in cells) + "</tr>"
+                html += "</tbody></table>"
+                output.append(html)
+            else:
+                output.extend(table_lines)
+            continue
+        output.append(line)
+        i += 1
+    return "\n".join(output)
+
+
+# ── 6. MASTER SPLITTER ────────────────────────────────────────
 _SPLIT_RE = re.compile(
     r'(```[\w]*\n?[\s\S]*?```'   # fenced code block
-    r'|\$\$[\s\S]*?\$\$'         # display math block
+    r'|\$\$[\s\S]*?\$\$'         # display math block only
     r')',
     re.DOTALL,
 )
 
+# Map common language aliases to ones Streamlit/Pygments recognises
 _LANG_ALIASES = {
     "js": "javascript",
     "ts": "typescript",
     "sh": "bash",
     "shell": "bash",
+    "py": "python",
 }
 
 def _canon_lang(lang: str) -> str:
     return _LANG_ALIASES.get(lang.lower(), lang.lower())
 
 
-# ── 6. MASTER RENDERER ────────────────────────────────────────
-def render_response(text: str):
-    """Render assistant response with math, code, callouts, and tables."""
+# ── 7. MASTER RENDERER ────────────────────────────────────────
 
-    # Step 0: normalise bare LaTeX → $…$ / $$…$$
+def render_response(text: str):
+    """Full professional render — no components.html, no mermaid."""
+
+    # Step 0: normalise Qwen bare LaTeX → $…$ / $$…$$
     text = _normalise_latex(text)
 
-    # Step 1: extract <think> / <reasoning> blocks
+    # Step 1: pull out <think> / <reasoning> blocks
     text, think_blocks = _extract_think_blocks(text)
     for label, content in think_blocks:
         st.markdown(
@@ -505,7 +575,7 @@ def render_response(text: str):
     if not text.strip():
         return
 
-    # Step 2: split on fenced code blocks and display math
+    # Step 2: split on fenced blocks / display math
     parts = _SPLIT_RE.split(text)
 
     for part in parts:
@@ -525,6 +595,7 @@ def render_response(text: str):
             if lang in ("json", "csv") and _try_render_data(code, lang):
                 continue
 
+            # Plain st.code — Streamlit's built-in Pygments highlighting
             st.code(code, language=lang if lang else None)
 
         # ── Display math  $$ … $$ ──────────────────────────────
@@ -534,19 +605,21 @@ def render_response(text: str):
                 try:
                     st.latex(formula)
                 except Exception:
-                    st.markdown(part, unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div style="text-align:center;padding:.5rem 0">{part}</div>',
+                        unsafe_allow_html=True)
 
-        # ── Prose / markdown (including tables) ───────────────
+        # ── Prose / markdown ───────────────────────────────────
         else:
             lines, plain_batch = part.split("\n"), []
 
             def _flush():
                 nonlocal plain_batch
                 if plain_batch:
-                    # Pass markdown directly to st.markdown so:
-                    #   • Tables render natively (and KaTeX processes math in cells)
-                    #   • Bold, italic, headers work correctly
-                    st.markdown("\n".join(plain_batch))
+                    chunk = _md_tables_to_html("\n".join(plain_batch))
+                    st.markdown(
+                        f'<div style="line-height:1.75">{chunk}</div>',
+                        unsafe_allow_html=True)
                     plain_batch = []
 
             for line in lines:
@@ -559,18 +632,14 @@ def render_response(text: str):
             _flush()
 
 
-# ── 7. STREAMING RENDER ──────────────────────────────────────
+# ── 8. STREAMING RENDER ──────────────────────────────────────
 def render_streaming_chunk(text: str, placeholder):
-    """Show normalised text while streaming; strip open think tags."""
     normalised = _normalise_latex(text)
-    # Remove any unclosed think block that is still streaming
     normalised = re.sub(
         r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
         '', normalised, flags=re.IGNORECASE
     ).strip()
-    # Strip partial fenced code so the cursor doesn't break layout
-    normalised = re.sub(r'```[\w]*\n?(?![\s\S]*```)', '', normalised).strip()
-    placeholder.markdown(normalised + " ▌")
+    placeholder.markdown(normalised + " ▌", unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────
@@ -607,8 +676,8 @@ def add_message(role: str, content: str):
     lc_history().append(cls(content=content))
 
 def get_context() -> list:
-    lc       = lc_history()
-    sys_msgs = [m for m in lc if isinstance(m, SystemMessage)]
+    lc        = lc_history()
+    sys_msgs  = [m for m in lc if isinstance(m, SystemMessage)]
     conv_msgs = [m for m in lc if not isinstance(m, SystemMessage)]
     if st.session_state.file_context:
         file_note = SystemMessage(
@@ -770,8 +839,8 @@ with tab_chat:
 
         search_results = None
         if web_search_enabled:
-            with st.spinner("🌐 Searching the web…"):
-                search_results = search_duckduckgo(raw)
+            with st.spinner(f"🌐 Searching {st.session_state.search_provider}…"):
+                search_results = web_search(raw)
             lc_input = build_augmented_prompt(raw, search_results)
         else:
             lc_input = raw
@@ -787,46 +856,64 @@ with tab_chat:
             with st.expander("🔍 Search Results", expanded=False):
                 st.text(search_results)
 
-        model_obj = load_model(model_name, temperature, max_tokens)
-        ctx       = get_context()
+        # Compare Models
+        if compare_models_on:
+            st.subheader("🆚 Model Comparison")
+            ctx   = get_context()
+            ccols = st.columns(len(COMPARE_MODELS))
+            for col, repo in zip(ccols, COMPARE_MODELS):
+                with col:
+                    rinfo = ALL_MODELS.get(repo, {})
+                    st.markdown(f"**{rinfo.get('label', repo.split('/')[-1])}**")
+                    try:
+                        m    = load_model(repo, temperature, max_tokens)
+                        resp = m.invoke(ctx)
+                        render_response(resp.content)
+                    except Exception as e:
+                        st.error(str(e))
 
-        with st.chat_message("assistant"):
-            placeholder   = st.empty()
-            full_response = ""
-            t0 = time.time()
+        # Normal Chat
+        else:
+            model_obj = load_model(model_name, temperature, max_tokens)
+            ctx       = get_context()
 
-            try:
-                for chunk in model_obj.stream(ctx):
-                    if chunk.content:
-                        full_response += chunk.content
-                        render_streaming_chunk(full_response, placeholder)
+            with st.chat_message("assistant"):
+                placeholder   = st.empty()
+                full_response = ""
+                t0 = time.time()
 
-                # Final professional render replaces the streaming placeholder
-                placeholder.empty()
-                render_response(full_response)
+                try:
+                    for chunk in model_obj.stream(ctx):
+                        if chunk.content:
+                            full_response += chunk.content
+                            render_streaming_chunk(full_response, placeholder)
 
-            except Exception as e:
-                full_response = f"⚠️ Error: {e}"
-                placeholder.error(full_response)
+                    # Final professional render
+                    placeholder.empty()
+                    render_response(full_response)
 
-            elapsed = round(time.time() - t0, 2)
-            st.session_state.response_times.append(elapsed)
+                except Exception as e:
+                    full_response = f"⚠️ Error: {e}"
+                    placeholder.error(full_response)
 
-            if show_stats:
-                words      = len(full_response.split())
-                est_tokens = len(full_response) // 4
-                st.markdown(
-                    f'<span class="stat-badge">⏱ {elapsed}s</span>'
-                    f'<span class="stat-badge">📝 {words} words</span>'
-                    f'<span class="stat-badge">🔢 ~{est_tokens} tokens</span>'
-                    f'<span class="stat-badge">🤖 {cur_info["label"]}</span>',
-                    unsafe_allow_html=True)
+                elapsed = round(time.time() - t0, 2)
+                st.session_state.response_times.append(elapsed)
 
-            with st.expander("📋 Copy raw response", expanded=False):
-                st.code(full_response, language="markdown")
+                if show_stats:
+                    words      = len(full_response.split())
+                    est_tokens = len(full_response) // 4
+                    st.markdown(
+                        f'<span class="stat-badge">⏱ {elapsed}s</span>'
+                        f'<span class="stat-badge">📝 {words} words</span>'
+                        f'<span class="stat-badge">🔢 ~{est_tokens} tokens</span>'
+                        f'<span class="stat-badge">🤖 {cur_info["label"]}</span>',
+                        unsafe_allow_html=True)
 
-        add_message("assistant", full_response)
-        sess()["count"] += 1
+                with st.expander("📋 Copy raw response", expanded=False):
+                    st.code(full_response, language="markdown")
+
+            add_message("assistant", full_response)
+            sess()["count"] += 1
 
     # ── Export ─────────────────────────────
     st.divider()
@@ -865,3 +952,5 @@ with tab_chat:
                 st.caption(f"⭐ Ratings — 👍 {all_ratings.count('👍')}  ·  👎 {all_ratings.count('👎')}")
 
 st.caption("Built with Streamlit · LangChain · Hugging Face")
+
+
