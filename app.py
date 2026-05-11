@@ -276,7 +276,7 @@ def wiki_retrieve(query: str, top_k: int = 2) -> str:
     """
     try:
         retriever = _get_wiki_retriever(top_k=top_k)
-        docs = retriever.get_relevant_documents(query)
+        docs = retriever.invoke(query)
         if not docs:
             return ""
         parts = []
@@ -472,10 +472,11 @@ if st.session_state.current_mode != mode_key:
 # Model Loader
 # ──────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
-def load_model(repo_id: str, temp: float, max_new_tokens: int):
+def load_model(repo_id: str):
     llm = HuggingFaceEndpoint(
-        repo_id=repo_id, task="text-generation",
-        max_new_tokens=max_new_tokens, temperature=temp)
+        repo_id=repo_id,
+        task="text-generation"
+    )
     return ChatHuggingFace(llm=llm)
 
 # ──────────────────────────────────────────
@@ -921,7 +922,7 @@ with tab_chat:
 
     if auto_title:
         full_text = " ".join(c for _, c, _ in chat_history()[:4])
-        model_obj = load_model(model_name, temperature, max_tokens)
+        model_obj = load_model(model_name)
         with st.spinner("Generating title…"):
             resp = model_obj.invoke([HumanMessage(
                 content=f"Generate a 4-5 word title for this conversation. "
@@ -934,7 +935,7 @@ with tab_chat:
 
     if summarize:
         full_text = "\n".join(f"{r.upper()}: {c}" for r, c, _ in chat_history())
-        model_obj = load_model(model_name, temperature, max_tokens)
+        model_obj = load_model(model_name)
         with st.expander("📝 Conversation Summary", expanded=True):
             with st.spinner("Summarizing…"):
                 resp = model_obj.invoke([HumanMessage(
@@ -990,7 +991,7 @@ with tab_chat:
                 with st.expander("🌐 Web Search Results", expanded=False):
                     st.text(web_ctx)
 
-        model_obj = load_model(model_name, temperature, max_tokens)
+        model_obj = load_model(model_name)
         ctx       = get_context()
 
         with st.chat_message("assistant"):
