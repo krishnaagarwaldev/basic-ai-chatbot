@@ -10,6 +10,12 @@ from ddgs import DDGS
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 
+# ── RAG / Vector Store imports ─────────────────────────────────
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.retrievers import WikipediaRetriever
+
 load_dotenv()
 
 st.set_page_config(page_title="AI Chatbot", page_icon="🤖", layout="wide")
@@ -43,11 +49,8 @@ st.markdown(r"""
   "></script>
 
 <style>
-/* KaTeX */
 .katex{font-size:1.15rem!important}
 .katex-display{overflow-x:auto;padding:.5rem 0}
-
-/* Tables — keep as markdown so KaTeX can render math inside cells */
 table{width:100%!important;border-collapse:collapse!important;margin:1rem 0!important;
   font-size:.92rem!important;border-radius:8px!important;overflow:hidden!important;
   box-shadow:0 1px 8px rgba(0,0,0,.3)!important}
@@ -58,8 +61,6 @@ th,td{padding:10px 14px!important;text-align:left!important;
 th:last-child,td:last-child{border-right:none!important}
 tbody tr:nth-child(even){background:#161b22!important}
 tbody tr:hover{background:#1c2736!important;transition:background .15s}
-
-/* Callout boxes */
 .callout{border-radius:8px;padding:.75rem 1rem;margin:.8rem 0;
   display:flex;gap:.6rem;align-items:flex-start;font-size:.93rem}
 .callout-icon{font-size:1.1rem;flex-shrink:0;margin-top:1px}
@@ -68,34 +69,16 @@ tbody tr:hover{background:#1c2736!important;transition:background .15s}
 .callout.success{background:#0d2119;border:1px solid #238636;color:#3fb950}
 .callout.error  {background:#2a0e0e;border:1px solid #da3633;color:#f85149}
 .callout.tip    {background:#1a1f2e;border:1px solid #6e40c9;color:#d2a8ff}
-
-/* Think / reasoning block */
-details.think-block{
-  background:#0d1117;border:1px solid #30363d;border-radius:8px;
-  margin:.6rem 0;padding:0}
-details.think-block summary{
-  padding:.5rem .8rem;cursor:pointer;color:#8b949e;font-size:.82rem;
-  font-style:italic;list-style:none;user-select:none}
+details.think-block{background:#0d1117;border:1px solid #30363d;border-radius:8px;margin:.6rem 0;padding:0}
+details.think-block summary{padding:.5rem .8rem;cursor:pointer;color:#8b949e;font-size:.82rem;font-style:italic;list-style:none;user-select:none}
 details.think-block summary::-webkit-details-marker{display:none}
 details.think-block summary::before{content:"🧠 ";margin-right:4px}
-details.think-block .think-body{
-  padding:.6rem 1rem .8rem;color:#8b949e;font-size:.88rem;
-  border-top:1px solid #21262d;font-style:italic;line-height:1.6;white-space:pre-wrap}
-
-/* Blockquote */
-blockquote{border-left:4px solid #58a6ff!important;padding:.5rem 1rem!important;
-  margin:.8rem 0!important;background:#161b22!important;border-radius:0 6px 6px 0!important;
-  color:#8b949e!important;font-style:italic!important}
-
-/* Headers */
-h1,h2,h3,h4{margin-top:1.2rem!important;margin-bottom:.5rem!important;
-  font-weight:700!important;border-bottom:1px solid #21262d;padding-bottom:.3rem}
-
-/* Stat badges */
-.stat-badge{display:inline-block;background:#161b22;border:1px solid #30363d;
-  border-radius:20px;padding:2px 10px;font-size:.78rem;color:#8b949e;margin-right:6px}
-
-/* Chat polish */
+details.think-block .think-body{padding:.6rem 1rem .8rem;color:#8b949e;font-size:.88rem;border-top:1px solid #21262d;font-style:italic;line-height:1.6;white-space:pre-wrap}
+blockquote{border-left:4px solid #58a6ff!important;padding:.5rem 1rem!important;margin:.8rem 0!important;background:#161b22!important;border-radius:0 6px 6px 0!important;color:#8b949e!important;font-style:italic!important}
+h1,h2,h3,h4{margin-top:1.2rem!important;margin-bottom:.5rem!important;font-weight:700!important;border-bottom:1px solid #21262d;padding-bottom:.3rem}
+.stat-badge{display:inline-block;background:#161b22;border:1px solid #30363d;border-radius:20px;padding:2px 10px;font-size:.78rem;color:#8b949e;margin-right:6px}
+.rag-badge{display:inline-block;background:#1a2f1a;border:1px solid #238636;border-radius:20px;padding:2px 10px;font-size:.78rem;color:#3fb950;margin-right:6px}
+.wiki-badge{display:inline-block;background:#1a1f35;border:1px solid #6e40c9;border-radius:20px;padding:2px 10px;font-size:.78rem;color:#d2a8ff;margin-right:6px}
 [data-testid="stChatMessage"]{border-radius:12px!important;margin-bottom:4px!important}
 hr{border-color:#21262d!important;margin:1rem 0!important}
 </style>
@@ -187,7 +170,6 @@ SUGGESTIONS = [
 # Session State
 # ──────────────────────────────────────────
 def _init_state():
-    
     for k, v in {
         "sessions":         {"Session 1": {"history": [], "lc_history": [], "count": 0}},
         "active_session":   "Session 1",
@@ -204,6 +186,10 @@ def _init_state():
         },
         "file_context":     "",
         "custom_prompt":    "",
+        # ── NEW: RAG state ──────────────────
+        "rag_vectorstore":  None,   # FAISS index for the uploaded file
+        "rag_file_name":    "",     # name of the indexed file
+        "rag_chunk_count":  0,      # how many chunks were indexed
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -218,6 +204,124 @@ def chat_history() -> list:
 
 def lc_history() -> list:
     return sess()["lc_history"]
+
+
+# ══════════════════════════════════════════════════════════════
+# ★  RAG HELPERS  ★
+# ══════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner=False)
+def _get_embeddings():
+    """Load the embedding model once and cache it."""
+    return HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+
+
+def build_rag_index(text: str) -> tuple[object, int]:
+    """
+    Chunk `text` and build a FAISS vector store.
+    Returns (vectorstore, chunk_count).
+    """
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=80,
+        separators=["\n\n", "\n", ".", " ", ""],
+    )
+    chunks = splitter.create_documents([text])
+    if not chunks:
+        return None, 0
+
+    embeddings = _get_embeddings()
+    vs = FAISS.from_documents(chunks, embeddings)
+    return vs, len(chunks)
+
+
+def rag_retrieve(query: str, k: int = 4) -> str:
+    """
+    Retrieve the top-k chunks from the FAISS index most relevant to `query`.
+    Returns a formatted context string, or "" if no index exists.
+    """
+    vs = st.session_state.rag_vectorstore
+    if vs is None:
+        return ""
+    docs = vs.similarity_search(query, k=k)
+    if not docs:
+        return ""
+    context = "\n\n---\n\n".join(
+        f"[Chunk {i+1}]\n{d.page_content}" for i, d in enumerate(docs)
+    )
+    return context
+
+
+# ══════════════════════════════════════════════════════════════
+# ★  WIKIPEDIA RETRIEVER HELPER  ★
+# ══════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner=False)
+def _get_wiki_retriever(top_k: int = 2, doc_content_chars_max: int = 2000):
+    """Return a cached WikipediaRetriever instance."""
+    return WikipediaRetriever(
+        top_k_results=top_k,
+        doc_content_chars_max=doc_content_chars_max,
+    )
+
+
+def wiki_retrieve(query: str, top_k: int = 2) -> str:
+    """
+    Fetch Wikipedia summaries for `query`.
+    Returns a formatted string or "" on failure.
+    """
+    try:
+        retriever = _get_wiki_retriever(top_k=top_k)
+        docs = retriever.get_relevant_documents(query)
+        if not docs:
+            return ""
+        parts = []
+        for doc in docs:
+            title = doc.metadata.get("title", "Wikipedia")
+            parts.append(f"**[Wikipedia: {title}]**\n{doc.page_content[:1500]}")
+        return "\n\n---\n\n".join(parts)
+    except Exception as e:
+        return f"[Wikipedia retrieval error: {e}]"
+
+
+def build_augmented_prompt_rag(
+    query: str,
+    rag_ctx: str = "",
+    wiki_ctx: str = "",
+    web_ctx: str = "",
+) -> str:
+    """
+    Combine all retrieved context into a single augmented prompt.
+    Priority order shown to model: RAG file > Wikipedia > Web search.
+    """
+    sections = []
+    if rag_ctx:
+        sections.append(
+            f"=== RELEVANT EXCERPTS FROM UPLOADED FILE ===\n{rag_ctx}\n=== END FILE EXCERPTS ==="
+        )
+    if wiki_ctx:
+        sections.append(
+            f"=== WIKIPEDIA CONTEXT ===\n{wiki_ctx}\n=== END WIKIPEDIA ==="
+        )
+    if web_ctx:
+        sections.append(
+            f"=== WEB SEARCH RESULTS ===\n{web_ctx}\n=== END WEB SEARCH ==="
+        )
+
+    if not sections:
+        return query
+
+    preamble = (
+        "You have access to the following retrieved context. "
+        "Use it to answer accurately. Do NOT claim you lack information "
+        "if it is present below.\n\n"
+    )
+    return preamble + "\n\n".join(sections) + f"\n\nUser question: {query}\n\nAnswer:"
+
 
 # ──────────────────────────────────────────
 # Sidebar
@@ -284,12 +388,33 @@ with st.sidebar:
     memory_window = st.slider("Memory Window",   2,   20,   10,   2)
 
     st.divider()
-    web_search_enabled = st.toggle("🌐 Web Search")
+
+    # ── Retrieval options ──────────────────
+    st.subheader("🔍 Retrieval")
+
+    web_search_enabled  = st.toggle("🌐 Web Search (DuckDuckGo)")
+    wiki_search_enabled = st.toggle("📖 Wikipedia Retriever")
+    rag_enabled         = st.toggle("📄 RAG (File Search)", value=True,
+                                    help="When ON, queries search your uploaded file via vector similarity.")
+
+    if wiki_search_enabled:
+        wiki_top_k = st.slider("Wikipedia results", 1, 5, 2)
+    else:
+        wiki_top_k = 2
+
+    if rag_enabled:
+        rag_top_k = st.slider("RAG chunks to retrieve", 2, 8, 4)
+    else:
+        rag_top_k = 4
+
+    show_retrieval_debug = st.toggle("🔬 Show Retrieval Debug", value=False)
+
     if web_search_enabled:
-        show_search_debug = st.toggle("Show Search Debug", value=False)
+        show_search_debug = show_retrieval_debug
     else:
         show_search_debug = False
 
+    st.divider()
     show_timestamps = st.toggle("🕐 Timestamps",      value=True)
     show_stats      = st.toggle("📊 Response Stats",  value=True)
     show_ratings    = st.toggle("⭐ Message Ratings", value=True)
@@ -310,6 +435,21 @@ with st.sidebar:
         avg_t = sum(st.session_state.response_times) / len(st.session_state.response_times)
         st.metric("Avg Response Time", f"{avg_t:.1f}s")
         st.metric("Total Exchanges",   sess()["count"])
+
+    # ── RAG index status ───────────────────
+    if st.session_state.rag_vectorstore is not None:
+        st.divider()
+        st.success(
+            f"📚 RAG Index Active\n\n"
+            f"**File:** {st.session_state.rag_file_name}\n\n"
+            f"**Chunks:** {st.session_state.rag_chunk_count}"
+        )
+        if st.button("🗑️ Clear RAG Index", use_container_width=True):
+            st.session_state.rag_vectorstore = None
+            st.session_state.rag_file_name   = ""
+            st.session_state.rag_chunk_count  = 0
+            st.session_state.file_context     = ""
+            st.rerun()
 
 # ──────────────────────────────────────────
 # Sync System Prompt
@@ -339,7 +479,7 @@ def load_model(repo_id: str, temp: float, max_new_tokens: int):
     return ChatHuggingFace(llm=llm)
 
 # ──────────────────────────────────────────
-# Web Search (DuckDuckGo only)
+# Web Search (DuckDuckGo)
 # ──────────────────────────────────────────
 def search_duckduckgo(query: str, max_results: int = 6) -> str:
     try:
@@ -351,13 +491,6 @@ def search_duckduckgo(query: str, max_results: int = 6) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
-def build_augmented_prompt(query: str, results: str) -> str:
-    return (
-        "You have access to LIVE web search results below. "
-        "You MUST use them to answer. Do NOT claim you lack current info.\n\n"
-        f"=== WEB SEARCH RESULTS ===\n{results}\n=== END ===\n\n"
-        f"User question: {query}\n\nAnswer using the search results:")
-
 
 # ══════════════════════════════════════════════════════════════
 # ★★★  RENDERING ENGINE  ★★★
@@ -365,7 +498,6 @@ def build_augmented_prompt(query: str, results: str) -> str:
 
 import html as _html
 
-# ── 1. LATEX NORMALISER ───────────────────────────────────────
 _BRACKET_DISPLAY_RE = re.compile(r'\\\[([\s\S]*?)\\\]')
 _PAREN_INLINE_RE    = re.compile(r'\\\((.*?)\\\)')
 _RAW_DISPLAY_RE = re.compile(
@@ -381,8 +513,6 @@ def _normalise_latex(text: str) -> str:
     text = _RAW_DISPLAY_RE.sub(lambda m: f'$$\n{m.group(1)}\n$$', text)
     return text
 
-
-# ── 2. THINK-BLOCK EXTRACTOR ──────────────────────────────────
 _THINK_CLOSED_RE = re.compile(
     r'<(think|thinking|reasoning|scratchpad)>([\s\S]*?)<\/\1>',
     re.IGNORECASE,
@@ -394,11 +524,9 @@ _THINK_OPEN_RE = re.compile(
 
 def _extract_think_blocks(text: str):
     blocks: list[tuple[str, str]] = []
-
     def _replace_closed(m):
         blocks.append((m.group(1).capitalize(), m.group(2).strip()))
         return ""
-
     text = _THINK_CLOSED_RE.sub(_replace_closed, text).strip()
     m = _THINK_OPEN_RE.search(text)
     if m:
@@ -406,8 +534,6 @@ def _extract_think_blocks(text: str):
         text = text[: m.start()].strip()
     return text, blocks
 
-
-# ── 3. CALLOUT DETECTOR ───────────────────────────────────────
 CALLOUT_MAP = {
     "warning":("warning","⚠️"), "tip":("tip","💡"),
     "info":("info","ℹ️"),       "note":("info","📝"),
@@ -434,84 +560,42 @@ def _try_callout(line: str):
             f'<span class="callout-icon">{icon}</span>'
             f'<span>{_html.escape(body)}</span></div>')
 
-
-# ── 4. TABLE SANITISER ────────────────────────────────────────
-# Models like Qwen 7B sometimes produce malformed tables where:
-#   • <br> tags appear inside cells (should be a space or newline)
-#   • raw LaTeX appears without $ delimiters
-#   • pipe rows are mixed with loose display math lines
-#
-# Strategy: detect table blocks, sanitise each cell individually,
-# then re-emit as clean markdown. KaTeX auto-render processes
-# the $ delimiters after st.markdown outputs the HTML.
-
-# Detects if a line looks like a table row (starts and ends with |, or
-# has at least 2 pipes and is not a separator row of dashes)
 _TABLE_ROW_RE  = re.compile(r'^\s*\|.*\|\s*$')
 _TABLE_SEP_RE  = re.compile(r'^\s*\|[\s\|\-:]+\|\s*$')
 
-# Bare LaTeX heuristics: a cell contains LaTeX commands but no $ wrapping
-_BARE_LATEX_RE = re.compile(
-    r'(?:^|(?<!\$))'           # not already inside $
-    r'((?:\\[a-zA-Z]+\{[^}]*\}|\\[a-zA-Z]+)'  # \cmd{} or \cmd
-    r'(?:[^$\n]*(?:\\[a-zA-Z]+\{[^}]*\}|\\[a-zA-Z]+))*)'  # more latex
-    r'(?:(?!\$)|$)'
-)
-
 def _wrap_bare_latex_cell(cell: str) -> str:
-    """If a table cell contains bare LaTeX (no $ delimiters), wrap it."""
     cell = cell.strip()
-    # Already has $ delimiters → leave alone
     if '$' in cell:
         return cell
-    # Contains LaTeX commands → wrap as inline math
     if re.search(r'\\[a-zA-Z]', cell):
         return f'${cell}$'
     return cell
 
 def _sanitise_table_block(table_lines: list[str]) -> str:
-    """
-    Clean a block of markdown table lines:
-      1. Replace <br> / <br/> with a space (keeps cell on one line)
-      2. Wrap bare LaTeX cells in $ ... $
-      3. Drop lines that are pure display math ($$...$$) — these
-         escaped the table and should be rendered separately below
-    Return the cleaned markdown table string.
-    """
     out = []
     for line in table_lines:
-        # Replace HTML line breaks inside cells
         line = re.sub(r'<br\s*/?>', ' ', line, flags=re.IGNORECASE)
-        # Skip lines that are actually display math that leaked out
         if line.strip().startswith('$$') and line.strip().endswith('$$'):
-            out.append(line)  # keep as-is; splitter will handle it
+            out.append(line)
             continue
         if _TABLE_SEP_RE.match(line):
             out.append(line)
             continue
         if _TABLE_ROW_RE.match(line):
-            # Split on | , sanitise each cell
             parts = line.split('|')
-            # parts[0] and parts[-1] are empty strings from leading/trailing |
             cells = [_wrap_bare_latex_cell(p) for p in parts]
             out.append('|'.join(cells))
         else:
             out.append(line)
     return '\n'.join(out)
 
-
 def _preprocess_tables(text: str) -> str:
-    """
-    Walk through lines. When we find a table block, sanitise it.
-    Non-table lines pass through unchanged.
-    """
     lines = text.split('\n')
     result = []
     i = 0
     while i < len(lines):
         line = lines[i]
         if _TABLE_ROW_RE.match(line):
-            # Collect the full table block
             table_block = []
             while i < len(lines) and (
                 _TABLE_ROW_RE.match(lines[i]) or
@@ -525,8 +609,6 @@ def _preprocess_tables(text: str) -> str:
             i += 1
     return '\n'.join(result)
 
-
-# ── 5. JSON/CSV → dataframe ───────────────────────────────────
 def _try_render_data(code: str, lang: str) -> bool:
     import pandas as pd
     if lang.lower() == "json":
@@ -546,11 +628,9 @@ def _try_render_data(code: str, lang: str) -> bool:
             pass
     return False
 
-
-# ── 6. MASTER SPLITTER ────────────────────────────────────────
 _SPLIT_RE = re.compile(
-    r'(```[\w]*\n?[\s\S]*?```'   # fenced code block
-    r'|\$\$[\s\S]*?\$\$'         # display math block
+    r'(```[\w]*\n?[\s\S]*?```'
+    r'|\$\$[\s\S]*?\$\$'
     r')',
     re.DOTALL,
 )
@@ -565,18 +645,9 @@ _LANG_ALIASES = {
 def _canon_lang(lang: str) -> str:
     return _LANG_ALIASES.get(lang.lower(), lang.lower())
 
-
-# ── 7. MASTER RENDERER ────────────────────────────────────────
 def render_response(text: str):
-    """Render assistant response with math, code, callouts, and tables."""
-
-    # Step 0: normalise bare \[...\] and \(...\) → $$ / $
     text = _normalise_latex(text)
-
-    # Step 1: sanitise tables — fix <br> tags and bare LaTeX in cells
     text = _preprocess_tables(text)
-
-    # Step 2: extract <think> / <reasoning> blocks
     text, think_blocks = _extract_think_blocks(text)
     for label, content in think_blocks:
         st.markdown(
@@ -585,18 +656,12 @@ def render_response(text: str):
             f'<div class="think-body">{_html.escape(content)}</div>'
             f'</details>',
             unsafe_allow_html=True)
-
     if not text.strip():
         return
-
-    # Step 3: split on fenced code blocks and display math
     parts = _SPLIT_RE.split(text)
-
     for part in parts:
         if not part.strip():
             continue
-
-        # ── Fenced code block ──────────────────────────────────
         if part.startswith("```"):
             m = re.match(r'```(\w*)\n?([\s\S]*?)```', part, re.DOTALL)
             if not m:
@@ -607,8 +672,6 @@ def render_response(text: str):
             if lang in ("json", "csv") and _try_render_data(code, lang):
                 continue
             st.code(code, language=lang if lang else None)
-
-        # ── Display math  $$ … $$ ──────────────────────────────
         elif part.startswith("$$") and part.endswith("$$"):
             formula = part[2:-2].strip()
             if formula:
@@ -616,17 +679,13 @@ def render_response(text: str):
                     st.latex(formula)
                 except Exception:
                     st.markdown(part)
-
-        # ── Prose / markdown (tables, headers, bold, etc.) ────
         else:
             lines, plain_batch = part.split("\n"), []
-
             def _flush():
                 nonlocal plain_batch
                 if plain_batch:
                     st.markdown("\n".join(plain_batch))
                     plain_batch = []
-
             for line in lines:
                 callout = _try_callout(line)
                 if callout:
@@ -636,25 +695,19 @@ def render_response(text: str):
                     plain_batch.append(line)
             _flush()
 
-
-# ── 8. STREAMING RENDER ──────────────────────────────────────
 def render_streaming_chunk(text: str, placeholder):
-    """Show normalised text while streaming; fix <br> and open think tags."""
     normalised = _normalise_latex(text)
-    # Replace <br> tags so they don't show as raw HTML mid-stream
     normalised = re.sub(r'<br\s*/?>', ' ', normalised, flags=re.IGNORECASE)
-    # Remove any unclosed think block that is still streaming
     normalised = re.sub(
         r'<(think|thinking|reasoning|scratchpad)>[\s\S]*$',
         '', normalised, flags=re.IGNORECASE
     ).strip()
-    # Strip partial fenced code so the cursor doesn't break layout
     normalised = re.sub(r'```[\w]*\n?(?![\s\S]*```)', '', normalised).strip()
     placeholder.markdown(normalised + " ▌")
 
 
 # ──────────────────────────────────────────
-# File Reader
+# File Reader  (now also builds RAG index)
 # ──────────────────────────────────────────
 def extract_file_text(uploaded_file) -> str:
     name = uploaded_file.name.lower()
@@ -690,11 +743,6 @@ def get_context() -> list:
     lc       = lc_history()
     sys_msgs = [m for m in lc if isinstance(m, SystemMessage)]
     conv_msgs = [m for m in lc if not isinstance(m, SystemMessage)]
-    if st.session_state.file_context:
-        file_note = SystemMessage(
-            content=f"The user has uploaded a file. Its content:\n\n"
-                    f"{st.session_state.file_context[:3000]}\n\nUse it to answer questions.")
-        return sys_msgs + [file_note] + conv_msgs[-memory_window:]
     return sys_msgs + conv_msgs[-memory_window:]
 
 
@@ -710,30 +758,73 @@ st.caption(
 # ──────────────────────────────────────────
 # Tabs
 # ──────────────────────────────────────────
-tab_chat, tab_file, tab_templates = st.tabs(["💬 Chat", "📁 File Upload", "📋 Prompt Templates"])
+tab_chat, tab_file, tab_templates = st.tabs(["💬 Chat", "📁 File Upload & RAG", "📋 Prompt Templates"])
 
 # ══════════════════════════════════════════
-# TAB: File Upload
+# TAB: File Upload  →  now builds RAG index
 # ══════════════════════════════════════════
 with tab_file:
-    st.subheader("📁 Upload a File to Chat With")
+    st.subheader("📁 Upload a File — RAG Indexing Enabled")
     st.caption("Supported: .txt, .md, .py, .csv, .json, .pdf")
+
+    col_info1, col_info2, col_info3 = st.columns(3)
+    col_info1.info("**📄 RAG Mode**\nFile is chunked & embedded into a FAISS vector store. Only the most relevant chunks are sent to the model per query.")
+    col_info2.info("**📖 Wikipedia Mode**\nEnable in sidebar → the model also gets live Wikipedia summaries for your query.")
+    col_info3.info("**🌐 Web Mode**\nEnable DuckDuckGo in sidebar → web results are also injected as context.")
+
     uploaded = st.file_uploader(
         "Upload file", type=["txt","md","py","csv","json","pdf"],
         label_visibility="collapsed")
+
     if uploaded:
         extracted = extract_file_text(uploaded)
-        st.session_state.file_context = extracted
-        st.success(f"✅ Loaded **{uploaded.name}** — {len(extracted)} characters")
+
+        # ── Build RAG index ────────────────
+        with st.spinner("🔨 Building RAG index (chunking + embedding)…"):
+            vs, n_chunks = build_rag_index(extracted)
+
+        if vs is not None:
+            st.session_state.rag_vectorstore = vs
+            st.session_state.rag_file_name   = uploaded.name
+            st.session_state.rag_chunk_count  = n_chunks
+            st.session_state.file_context     = extracted  # kept for fallback / export
+            st.success(
+                f"✅ RAG index built for **{uploaded.name}** — "
+                f"{n_chunks} chunks · {len(extracted):,} characters"
+            )
+        else:
+            st.warning("⚠️ Could not build RAG index (empty file?). Falling back to full-text context.")
+            st.session_state.file_context = extracted
+
         with st.expander("Preview file content"):
             st.code(extracted[:2000], language="text")
-    if st.session_state.file_context:
+
+    # ── RAG test panel ─────────────────────
+    if st.session_state.rag_vectorstore is not None:
+        st.divider()
+        st.subheader("🔍 Test RAG Retrieval")
+        test_q = st.text_input("Enter a test query to see which chunks get retrieved:")
+        if test_q:
+            with st.spinner("Retrieving…"):
+                result = rag_retrieve(test_q, k=rag_top_k if rag_enabled else 4)
+            if result:
+                st.markdown("**Retrieved chunks:**")
+                st.markdown(result)
+            else:
+                st.info("No chunks retrieved.")
+
         col_a, col_b = st.columns(2)
         with col_a:
-            st.info(f"📎 File active: {len(st.session_state.file_context)} chars in context")
+            st.info(
+                f"📎 **{st.session_state.rag_file_name}** active\n\n"
+                f"{st.session_state.rag_chunk_count} chunks indexed"
+            )
         with col_b:
-            if st.button("❌ Remove File"):
-                st.session_state.file_context = ""
+            if st.button("❌ Remove File & Index"):
+                st.session_state.rag_vectorstore = None
+                st.session_state.rag_file_name   = ""
+                st.session_state.rag_chunk_count  = 0
+                st.session_state.file_context     = ""
                 st.rerun()
 
 # ══════════════════════════════════════════
@@ -772,6 +863,18 @@ with tab_chat:
             selected_prompt = s
 
     st.divider()
+
+    # ── Active retrieval indicators ────────
+    indicators = []
+    if rag_enabled and st.session_state.rag_vectorstore is not None:
+        indicators.append(f'<span class="rag-badge">📄 RAG: {st.session_state.rag_file_name}</span>')
+    if wiki_search_enabled:
+        indicators.append(f'<span class="wiki-badge">📖 Wikipedia ON</span>')
+    if web_search_enabled:
+        indicators.append(f'<span class="stat-badge">🌐 Web Search ON</span>')
+    if indicators:
+        st.markdown(" ".join(indicators), unsafe_allow_html=True)
+        st.markdown("")
 
     # ── Chat History ───────────────────────
     for i, (role, content, ts) in enumerate(chat_history()):
@@ -816,7 +919,6 @@ with tab_chat:
     with col_auto_title:
         auto_title = st.button("🏷️ Auto-Title Session", disabled=len(chat_history()) < 2)
 
-    # ── Auto-Title ─────────────────────────
     if auto_title:
         full_text = " ".join(c for _, c, _ in chat_history()[:4])
         model_obj = load_model(model_name, temperature, max_tokens)
@@ -830,7 +932,6 @@ with tab_chat:
             st.session_state.active_session = new_title
             st.rerun()
 
-    # ── Summarize ──────────────────────────
     if summarize:
         full_text = "\n".join(f"{r.upper()}: {c}" for r, c, _ in chat_history())
         model_obj = load_model(model_name, temperature, max_tokens)
@@ -840,32 +941,54 @@ with tab_chat:
                     content=f"Summarize in 5 bullets:\n\n{full_text}")])
                 render_response(resp.content)
 
-    if st.session_state.file_context:
-        st.info("📎 File context active — the model can see your uploaded file.")
-
-    # ── Main Chat Logic ────────────────────
+    # ── Main Chat Logic ────────────────────────────────────────
     if user_input:
         raw = user_input.strip()
         st.session_state.last_user_input = raw
 
-        search_results = None
+        # ── Step 1: RAG retrieval ──────────
+        rag_ctx = ""
+        if rag_enabled and st.session_state.rag_vectorstore is not None:
+            with st.spinner("📄 Searching uploaded file (RAG)…"):
+                rag_ctx = rag_retrieve(raw, k=rag_top_k)
+
+        # ── Step 2: Wikipedia retrieval ────
+        wiki_ctx = ""
+        if wiki_search_enabled:
+            with st.spinner("📖 Fetching Wikipedia context…"):
+                wiki_ctx = wiki_retrieve(raw, top_k=wiki_top_k)
+
+        # ── Step 3: Web search ─────────────
+        web_ctx = ""
         if web_search_enabled:
             with st.spinner("🌐 Searching the web…"):
-                search_results = search_duckduckgo(raw)
-            lc_input = build_augmented_prompt(raw, search_results)
+                web_ctx = search_duckduckgo(raw)
+
+        # ── Step 4: Build final prompt ─────
+        if rag_ctx or wiki_ctx or web_ctx:
+            lc_input = build_augmented_prompt_rag(raw, rag_ctx, wiki_ctx, web_ctx)
         else:
             lc_input = raw
 
         add_message("user", raw)
-        if web_search_enabled:
+        # Replace last HumanMessage with the augmented version if needed
+        if lc_input != raw:
             lc_history()[-1] = HumanMessage(content=lc_input)
 
         with st.chat_message("user"):
             st.markdown(raw)
 
-        if web_search_enabled and show_search_debug:
-            with st.expander("🔍 Search Results", expanded=False):
-                st.text(search_results)
+        # ── Debug panels ───────────────────
+        if show_retrieval_debug:
+            if rag_ctx:
+                with st.expander("📄 RAG Chunks Retrieved", expanded=False):
+                    st.markdown(rag_ctx)
+            if wiki_ctx:
+                with st.expander("📖 Wikipedia Context Retrieved", expanded=False):
+                    st.markdown(wiki_ctx)
+            if web_ctx:
+                with st.expander("🌐 Web Search Results", expanded=False):
+                    st.text(web_ctx)
 
         model_obj = load_model(model_name, temperature, max_tokens)
         ctx       = get_context()
@@ -881,7 +1004,6 @@ with tab_chat:
                         full_response += chunk.content
                         render_streaming_chunk(full_response, placeholder)
 
-                # Final professional render replaces the streaming placeholder
                 placeholder.empty()
                 render_response(full_response)
 
@@ -892,15 +1014,26 @@ with tab_chat:
             elapsed = round(time.time() - t0, 2)
             st.session_state.response_times.append(elapsed)
 
+            # ── Source badges ───────────────
+            source_badges = []
+            if rag_ctx:
+                source_badges.append(f'<span class="rag-badge">📄 RAG</span>')
+            if wiki_ctx:
+                source_badges.append(f'<span class="wiki-badge">📖 Wikipedia</span>')
+            if web_ctx:
+                source_badges.append(f'<span class="stat-badge">🌐 Web</span>')
+
             if show_stats:
                 words      = len(full_response.split())
                 est_tokens = len(full_response) // 4
-                st.markdown(
+                badges = (
                     f'<span class="stat-badge">⏱ {elapsed}s</span>'
                     f'<span class="stat-badge">📝 {words} words</span>'
                     f'<span class="stat-badge">🔢 ~{est_tokens} tokens</span>'
-                    f'<span class="stat-badge">🤖 {cur_info["label"]}</span>',
-                    unsafe_allow_html=True)
+                    f'<span class="stat-badge">🤖 {cur_info["label"]}</span>'
+                    + ("  " + " ".join(source_badges) if source_badges else "")
+                )
+                st.markdown(badges, unsafe_allow_html=True)
 
             with st.expander("📋 Copy raw response", expanded=False):
                 st.code(full_response, language="markdown")
@@ -944,4 +1077,4 @@ with tab_chat:
                 st.divider()
                 st.caption(f"⭐ Ratings — 👍 {all_ratings.count('👍')}  ·  👎 {all_ratings.count('👎')}")
 
-st.caption("Built with Streamlit · LangChain · Hugging Face")
+st.caption("Built with Streamlit · LangChain · Hugging Face · FAISS · Wikipedia")
